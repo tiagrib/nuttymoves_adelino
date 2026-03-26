@@ -1,0 +1,15 @@
+[package]
+version = "0.1.0"
+title = "Adelino Lab"
+description = "Isaac Lab environments for the Adelino 5-DOF walking manipulator."
+keywords = ["robotics", "rl", "locomotion", "adelino"]
+
+[dependencies]
+"isaaclab" = {}
+"isaaclab_assets" = {}
+
+[core]
+reloadable = false
+
+[[python.module]]
+name = "adelino_lab"
