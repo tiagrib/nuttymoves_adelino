@@ -72,7 +72,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 PLATFORM_HEIGHT = 0.3
 
 # Keyboard state
-key_states = {"up": False, "down": False, "left": False, "right": False, "reset": False}
+key_states = {"up": False, "down": False, "left": False, "right": False, "reset": False, "reset_robot": False}
 
 
 def setup_keyboard():
@@ -90,6 +90,7 @@ def setup_keyboard():
         carb.input.KeyboardInput.LEFT: "left",
         carb.input.KeyboardInput.RIGHT: "right",
         carb.input.KeyboardInput.R: "reset",
+        carb.input.KeyboardInput.SPACE: "reset_robot",
     }
 
     def on_key_event(event, *args, **kwargs):
@@ -105,7 +106,8 @@ def setup_keyboard():
     print("\n=== Interactive Platform Controls ===")
     print("  Arrow Up/Down   : Tilt pitch")
     print("  Arrow Left/Right: Tilt roll")
-    print("  R               : Reset to level")
+    print("  R               : Reset platform to level")
+    print("  SPACE           : Reset robot (upright on platform)")
     print("=====================================\n")
 
 
@@ -133,13 +135,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     # Spawn robot on top of the platform
     env_cfg.scene.robot.init_state.pos = (0.0, 0.0, PLATFORM_HEIGHT + 0.01)
 
-    # Add tilting platform as a kinematic rigid body
+    # Add tilting platform as a kinematic rigid body with high friction
     env_cfg.scene.platform = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Platform",
         spawn=sim_utils.CuboidCfg(
             size=(0.5, 0.5, 0.02),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
             collision_props=sim_utils.CollisionPropertiesCfg(),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=5.0,
+                dynamic_friction=5.0,
+                friction_combine_mode="max",
+            ),
             visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.3, 0.6, 0.3)),
         ),
         init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, PLATFORM_HEIGHT)),
@@ -168,8 +175,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     policy = runner.get_inference_policy(device=env.unwrapped.device)
 
     platform: RigidObject = env.unwrapped.scene["platform"]
+    robot = env.unwrapped.scene["robot"]
     device = env.unwrapped.device
     num_envs = env.unwrapped.num_envs
+
+    # Force-set effort limits at runtime (USD D6 joints may have Max Force = 0)
+    num_joints = robot.num_joints
+    effort_limits = torch.full((num_envs, num_joints), 50.0, device=device)
+    robot.write_joint_effort_limit_to_sim(effort_limits)
+    print(f"[INFO]: Set effort limits to 50.0 for {num_joints} joints")
 
     setup_keyboard()
 
@@ -196,6 +210,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
         if key_states["left"]:
             tilt_roll = max(tilt_roll - tilt_speed, -max_tilt)
 
+        # Reset robot to upright on platform
+        if key_states["reset_robot"]:
+            key_states["reset_robot"] = False
+            robot = env.unwrapped.scene["robot"]
+            # Reset root state: position on platform, identity quaternion, zero velocity
+            default_state = robot.data.default_root_state.clone()
+            default_state[:, :3] = torch.tensor([[0.0, 0.0, PLATFORM_HEIGHT + 0.01]], device=device)
+            robot.write_root_state_to_sim(default_state)
+            # Reset joints to default positions and zero velocity
+            joint_pos = robot.data.default_joint_pos.clone()
+            joint_vel = torch.zeros_like(joint_pos)
+            robot.write_joint_state_to_sim(joint_pos, joint_vel)
+            print("  [Robot reset to upright]                    ")
+
         # Update platform orientation
         roll_rad = torch.tensor([math.radians(tilt_roll)], device=device).expand(num_envs)
         pitch_rad = torch.tensor([math.radians(tilt_pitch)], device=device).expand(num_envs)
@@ -211,8 +239,77 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
             if version.parse(installed_version) >= version.parse("4.0.0"):
                 policy.reset(dones)
 
-        if step_count % 50 == 0:
-            print(f"  pitch={tilt_pitch:+6.1f}  roll={tilt_roll:+6.1f}     ", end="\r")
+        # Debug visualization and console output
+        robot = env.unwrapped.scene["robot"]
+        grav_b = robot.data.projected_gravity_b[0].cpu()
+        root_pos = robot.data.root_pos_w[0].cpu()
+        root_quat = robot.data.root_quat_w[0].cpu()
+        lin_vel = robot.data.root_lin_vel_w[0].cpu()
+
+        # Draw debug visualization every frame
+        from isaacsim.util.debug_draw import _debug_draw
+        draw = _debug_draw.acquire_debug_draw_interface()
+        draw.clear_lines()
+        draw.clear_points()
+
+        bx, by, bz = root_pos[0].item(), root_pos[1].item(), root_pos[2].item()
+
+        # YELLOW vertical line — "ideal upright" reference (from base down to platform)
+        draw.draw_lines(
+            [(bx, by, bz)], [(bx, by, bz - 0.4)],
+            [(1.0, 1.0, 0.0, 0.8)], [4.0],
+        )
+
+        # RED line — projected gravity in BODY frame (what the policy actually sees)
+        # When upright: points straight down (0,0,-1). When tilted: x/y components appear.
+        # We draw it from the base using the robot's own orientation to visualize in world.
+        # The DIFFERENCE between red and yellow shows what the policy detects as tilt.
+        from isaaclab.utils.math import quat_apply
+        # Draw the robot's local "down" direction in world frame
+        # This is the robot's Z-axis (body frame down) projected into world
+        robot_down_b = torch.tensor([[0.0, 0.0, -1.0]], device=robot.data.root_quat_w.device)
+        robot_down_w = quat_apply(robot.data.root_quat_w[0:1], robot_down_b)[0].cpu()
+        grav_scale = 0.3
+        draw.draw_lines(
+            [(bx, by, bz)],
+            [(bx + robot_down_w[0].item() * grav_scale, by + robot_down_w[1].item() * grav_scale, bz + robot_down_w[2].item() * grav_scale)],
+            [(1.0, 0.1, 0.1, 1.0)], [8.0],
+        )
+
+        # BLUE line — velocity vector (shows sliding/falling direction)
+        vel_scale = 0.5
+        draw.draw_lines(
+            [(bx, by, bz)],
+            [(bx + lin_vel[0].item() * vel_scale, by + lin_vel[1].item() * vel_scale, bz + lin_vel[2].item() * vel_scale)],
+            [(0.2, 0.4, 1.0, 1.0)], [6.0],
+        )
+
+        # GREEN dot — robot base position
+        draw.draw_points([(bx, by, bz)], [(0.2, 1.0, 0.2, 1.0)], [20.0])
+
+        # WHITE dot — whole-body CoM projected vertically onto platform height
+        body_com_w = robot.data.body_com_pos_w  # (1, num_bodies, 3)
+        masses = robot.data.default_mass.to(body_com_w.device)  # (1, num_bodies)
+        total_mass = masses.sum(dim=-1, keepdim=True)
+        whole_com_w = (body_com_w * masses.unsqueeze(-1)).sum(dim=1) / total_mass  # (1, 3)
+        cx, cy, cz = whole_com_w[0, 0].item(), whole_com_w[0, 1].item(), whole_com_w[0, 2].item()
+        # Draw CoM as a magenta dot
+        draw.draw_points([(cx, cy, cz)], [(1.0, 0.3, 1.0, 1.0)], [20.0])
+        # Draw vertical projection line from CoM down to platform level
+        draw.draw_lines(
+            [(cx, cy, cz)], [(cx, cy, PLATFORM_HEIGHT)],
+            [(1.0, 0.3, 1.0, 0.5)], [2.0],
+        )
+        # Draw projected point on platform (WHITE — this must stay inside support polygon)
+        draw.draw_points([(cx, cy, PLATFORM_HEIGHT)], [(1.0, 1.0, 1.0, 1.0)], [20.0])
+
+        if step_count % 25 == 0:
+            print(
+                f"  plat: p={tilt_pitch:+5.1f} r={tilt_roll:+5.1f}"
+                f"  | grav_body: [{grav_b[0]:+.3f} {grav_b[1]:+.3f} {grav_b[2]:+.3f}]"
+                f"  | robot_down_w: [{robot_down_w[0]:+.3f} {robot_down_w[1]:+.3f} {robot_down_w[2]:+.3f}]",
+                end="\r",
+            )
         step_count += 1
 
     env.close()

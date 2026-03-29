@@ -17,7 +17,7 @@ class AdelinoBalancePPORunnerCfg(RslRlOnPolicyRunnerCfg):
     """
 
     num_steps_per_env = 24
-    max_iterations = 1000
+    max_iterations = 10000
     save_interval = 50
     experiment_name = "adelino_balance_flat"
     obs_groups = {"actor": ["policy"], "critic": ["policy"]}

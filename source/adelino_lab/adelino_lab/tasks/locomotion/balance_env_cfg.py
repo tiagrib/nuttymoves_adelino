@@ -1,12 +1,12 @@
-"""Environment configuration for Adelino balance task on flat ground.
+"""Environment configuration for Adelino balance task.
 
-The goal is for the 5-DOF serial-chain robot to learn to balance on its base,
-maintaining an upright posture while responding to perturbations.
+The robot stands on a kinematic platform that tilts randomly.
+It must learn to adjust its joints to keep its CoM over the support polygon.
 """
 
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -20,13 +20,8 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
 import isaaclab.envs.mdp as mdp
+import adelino_lab.tasks.locomotion.mdp as adelino_mdp
 
-##
-# Path to the Adelino USD asset (relative to nuttymoves repo root).
-# TODO: Update this path once the asset is in a stable location accessible
-#       to the training environment (e.g. copied into the extension or
-#       referenced via an absolute path / nucleus server).
-##
 ADELINO_USD_PATH = "C:/repo/nuttymoves/embodiments/adelino/v1/usd/adelino_fixed.usd"
 
 # Joint names for the 5 actuated DOFs (excludes wobble joints)
@@ -38,9 +33,14 @@ ADELINO_ACTUATED_JOINTS = [
     "joint_5",
 ]
 
+# Platform height — enough to clear ground plane at max tilt
+PLATFORM_HEIGHT = 0.3
+
 ##
 # Robot articulation config
 ##
+
+
 
 ADELINO_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
@@ -58,7 +58,7 @@ ADELINO_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.005),  # Just above ground (base bottom is ~z=0)
+        pos=(0.0, 0.0, PLATFORM_HEIGHT + 0.005),
         joint_pos={
             "joint_1": 0.0,
             "joint_2": 0.0,
@@ -68,14 +68,12 @@ ADELINO_CFG = ArticulationCfg(
         },
     ),
     actuators={
-        # The 5 actuated servo joints
         "servo_actuators": ImplicitActuatorCfg(
             joint_names_expr=ADELINO_ACTUATED_JOINTS,
             stiffness=500.0,
             damping=10.0,
             effort_limit_sim=50.0,
         ),
-        # The 10 passive wobble joints (compliance/slop in servo connections)
         "wobble_joints": ImplicitActuatorCfg(
             joint_names_expr=[".*wobble.*"],
             stiffness=0.0,
@@ -83,6 +81,26 @@ ADELINO_CFG = ArticulationCfg(
             effort_limit_sim=0.0,
         ),
     },
+)
+
+##
+# Platform config — kinematic rigid body that tilts under the robot
+##
+
+PLATFORM_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/Platform",
+    spawn=sim_utils.CuboidCfg(
+        size=(0.5, 0.5, 0.02),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
+        collision_props=sim_utils.CollisionPropertiesCfg(),
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            static_friction=5.0,
+            dynamic_friction=5.0,
+            friction_combine_mode="max",
+        ),
+        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.3, 0.6, 0.3)),
+    ),
+    init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, PLATFORM_HEIGHT)),
 )
 
 
@@ -93,9 +111,9 @@ ADELINO_CFG = ArticulationCfg(
 
 @configclass
 class AdelinoBalanceSceneCfg(InteractiveSceneCfg):
-    """Scene configuration for Adelino balance task."""
+    """Scene with robot on a tilting platform."""
 
-    # Ground plane
+    # Ground plane (robot is above it on the platform)
     ground = AssetBaseCfg(
         prim_path="/World/ground",
         spawn=sim_utils.GroundPlaneCfg(),
@@ -104,9 +122,8 @@ class AdelinoBalanceSceneCfg(InteractiveSceneCfg):
     # Robot
     robot: ArticulationCfg = ADELINO_CFG
 
-    # TODO: Add contact sensor once USD prim paths for rigid bodies are confirmed.
-    # The MJCF→USD conversion nests bodies under Robot/base/... which requires
-    # the correct prim_path pattern. For now, fall detection uses orientation only.
+    # Tilting platform
+    platform: RigidObjectCfg = PLATFORM_CFG
 
     # Lighting
     sky_light = AssetBaseCfg(
@@ -125,7 +142,7 @@ class AdelinoBalanceSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class ActionsCfg:
-    """Action specification: joint position targets for the 5 actuated joints."""
+    """Joint position targets for the 5 actuated joints."""
 
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
@@ -148,17 +165,22 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for the actor/critic."""
 
-        # Base orientation (gravity projection tells the policy which way is up)
+        # Base orientation relative to gravity
         projected_gravity = ObsTerm(
             func=mdp.projected_gravity,
             noise=Unoise(n_min=-0.05, n_max=0.05),
         )
-        # Base angular velocity
+        # Base linear velocity (detects sliding/falling)
+        base_lin_vel = ObsTerm(
+            func=mdp.base_lin_vel,
+            noise=Unoise(n_min=-0.1, n_max=0.1),
+        )
+        # Base angular velocity (detects tipping)
         base_ang_vel = ObsTerm(
             func=mdp.base_ang_vel,
             noise=Unoise(n_min=-0.2, n_max=0.2),
         )
-        # Joint positions (relative to default) — actuated joints only
+        # Joint positions — actuated joints only
         joint_pos = ObsTerm(
             func=mdp.joint_pos_rel,
             params={"asset_cfg": SceneEntityCfg("robot", joint_names=ADELINO_ACTUATED_JOINTS)},
@@ -190,19 +212,18 @@ class RewardsCfg:
     """Reward terms for balance task."""
 
     # --- Task rewards ---
-    # Stay upright: penalize deviation from flat orientation
+    # Positive reward for staying alive (not terminated)
+    is_alive = RewTerm(func=mdp.is_alive, weight=1.0)
+    # Stay upright: penalize base tilt from horizontal
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
+    # Keep CoM over support polygon
+    com_projection = RewTerm(func=adelino_mdp.com_projection_penalty, weight=-10.0)
 
     # --- Regularization penalties ---
-    # Penalize joint accelerations (smooth motion)
     dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    # Penalize joint torques (energy efficiency)
     dof_torques_l2 = RewTerm(func=mdp.joint_torques_l2, weight=-1.0e-5)
-    # Penalize rapid action changes (smooth control)
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
-    # Penalize angular velocity (prefer stillness)
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    # Penalize vertical velocity
     lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
 
 
@@ -215,35 +236,30 @@ class RewardsCfg:
 class TerminationsCfg:
     """Termination conditions."""
 
-    # Episode timeout
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-
-    # TODO: Add base_contact termination once contact sensor is configured.
-    # For now, orientation-based rewards handle fall recovery incentive.
+    # Terminate if robot tilts beyond ~69° (it has fallen)
+    fallen = DoneTerm(func=adelino_mdp.base_too_tilted, params={"max_tilt_rad": 1.2})
 
 
 ##
-# MDP: Events (domain randomization)
+# MDP: Events
 ##
 
 
 @configclass
 class EventCfg:
-    """Domain randomization events."""
+    """Perturbation events — tilting platform + pushes."""
 
     # --- On reset ---
+    # Reset robot pose
     reset_base = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
         params={
-            "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
+            "pose_range": {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (-3.14, 3.14)},
             "velocity_range": {
-                "x": (0.0, 0.0),
-                "y": (0.0, 0.0),
-                "z": (0.0, 0.0),
-                "roll": (0.0, 0.0),
-                "pitch": (0.0, 0.0),
-                "yaw": (0.0, 0.0),
+                "x": (0.0, 0.0), "y": (0.0, 0.0), "z": (0.0, 0.0),
+                "roll": (0.0, 0.0), "pitch": (0.0, 0.0), "yaw": (0.0, 0.0),
             },
         },
     )
@@ -251,40 +267,39 @@ class EventCfg:
         func=mdp.reset_joints_by_offset,
         mode="reset",
         params={
-            "position_range": (-0.2, 0.2),
+            "position_range": (-0.1, 0.1),
             "velocity_range": (0.0, 0.0),
             "asset_cfg": SceneEntityCfg("robot", joint_names=ADELINO_ACTUATED_JOINTS),
         },
     )
-    # Randomize gravity on each episode reset (each episode starts on a different "slope").
-    # ±6.94 m/s² lateral ≈ up to 45° effective slope (9.81 * sin(45°) ≈ 6.94).
-    reset_gravity = EventTerm(
-        func=mdp.randomize_physics_scene_gravity,
+    # Reset platform to level so robot spawns cleanly on it
+    reset_platform = EventTerm(
+        func=adelino_mdp.reset_platform,
         mode="reset",
-        params={
-            "gravity_distribution_params": ([-6.94, -6.94, -10.5], [6.94, 6.94, -6.94]),
-            "operation": "abs",
-        },
     )
 
     # --- Interval ---
-    # Push the robot occasionally (simulates external perturbations)
+    # Pick a new random tilt target every 2-5s (the actual motion is smooth)
+    new_tilt_target = EventTerm(
+        func=adelino_mdp.tilt_platform,
+        mode="interval",
+        interval_range_s=(2.0, 5.0),
+        params={"max_tilt_deg": 30.0},
+    )
+    # Smoothly interpolate platform toward target every step
+    # interval_range_s near dt ensures this runs every physics step
+    smooth_tilt = EventTerm(
+        func=adelino_mdp.tilt_platform_step,
+        mode="interval",
+        interval_range_s=(0.02, 0.02),
+        params={"lerp_rate": 0.02, "max_lerp_multiplier": 5.0},
+    )
+    # Push the robot occasionally
     push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
-        interval_range_s=(8.0, 12.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
-    )
-    # Tilt gravity periodically (simulates a platform that keeps changing angle, up to 45°).
-    # The robot must continuously adapt, not just balance on a fixed slope.
-    tilt_gravity = EventTerm(
-        func=mdp.randomize_physics_scene_gravity,
-        mode="interval",
-        interval_range_s=(3.0, 7.0),
-        params={
-            "gravity_distribution_params": ([-6.94, -6.94, -10.5], [6.94, 6.94, -6.94]),
-            "operation": "abs",
-        },
+        interval_range_s=(5.0, 10.0),
+        params={"velocity_range": {"x": (-0.3, 0.3), "y": (-0.3, 0.3)}},
     )
 
 
@@ -295,7 +310,7 @@ class EventCfg:
 
 @configclass
 class AdelinoBalanceFlatEnvCfg(ManagerBasedRLEnvCfg):
-    """Adelino balance on flat ground."""
+    """Adelino balance on tilting platform."""
 
     scene: AdelinoBalanceSceneCfg = AdelinoBalanceSceneCfg(num_envs=256, env_spacing=2.5)
     observations: ObservationsCfg = ObservationsCfg()
@@ -305,24 +320,19 @@ class AdelinoBalanceFlatEnvCfg(ManagerBasedRLEnvCfg):
     events: EventCfg = EventCfg()
 
     def __post_init__(self):
-        """Post initialization."""
-        # Simulation parameters
         self.decimation = 4
         self.episode_length_s = 20.0
-        self.sim.dt = 0.005  # 200 Hz physics
+        self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
-
 
 
 @configclass
 class AdelinoBalanceFlatEnvCfg_PLAY(AdelinoBalanceFlatEnvCfg):
-    """Play/evaluation variant: fewer envs, no randomization."""
+    """Play/evaluation variant."""
 
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 50
         self.scene.env_spacing = 2.5
-        # Disable observation noise
         self.observations.policy.enable_corruption = False
-        # Disable perturbations
         self.events.push_robot = None
