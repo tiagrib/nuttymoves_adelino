@@ -3,7 +3,8 @@
 import torch
 from isaaclab.envs import ManagerBasedRLEnv
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import quat_apply_inverse
+
+from .observations import com_projection_on_support
 
 
 def com_projection_penalty(
@@ -12,38 +13,48 @@ def com_projection_penalty(
 ) -> torch.Tensor:
     """Penalize the CoM projection being far from the base center.
 
-    Computes the whole-body center of mass, projects it vertically onto the
-    base's local XY plane, and returns the squared distance from the base center.
-    A robot that extends its arm sideways will have a large penalty because
-    the CoM shifts away from the support polygon center.
+    Uses the vertical projection of the CoM onto the support plane.
+    Returns the squared XY distance from the base center.
 
     Returns:
-        Squared distance of CoM projection from base center in base frame (num_envs,).
+        Squared distance of CoM projection from base center (num_envs,).
+    """
+    com_xy = com_projection_on_support(env, asset_cfg)
+    return com_xy[:, 0] ** 2 + com_xy[:, 1] ** 2
+
+
+def weighted_joint_torques(
+    env: ManagerBasedRLEnv,
+    joint_weights: dict[str, float] | None = None,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Per-joint weighted torque penalty for actuated joints only.
+
+    Allows penalizing upper joint torques more heavily than lower ones,
+    so the policy prefers using lower joints for balance and keeps
+    upper joints quiet for expression.
+
+    Only considers joints listed in joint_weights. Wobble joints and
+    other unlisted joints are ignored.
+
+    Args:
+        joint_weights: Dict mapping joint name to penalty multiplier.
+            Higher values = more penalized = less likely to be used.
+            Only joints listed here are included in the penalty.
+
+    Returns:
+        Weighted sum of squared torques (num_envs,).
     """
     robot = env.scene[asset_cfg.name]
+    torques = robot.data.applied_torque  # (num_envs, num_joints)
 
-    # Per-body CoM positions in world frame: (num_envs, num_bodies, 3)
-    body_com_w = robot.data.body_com_pos_w
-    # Per-body masses: (num_envs, num_bodies)
-    masses = robot.data.default_mass
+    if joint_weights is None:
+        return torch.sum(torques**2, dim=-1)
 
-    # Ensure masses are on the same device as positions
-    masses = masses.to(body_com_w.device)
+    # Only sum torques for joints explicitly listed in joint_weights
+    result = torch.zeros(torques.shape[0], device=torques.device)
+    for i, name in enumerate(robot.joint_names):
+        if name in joint_weights:
+            result += torques[:, i] ** 2 * joint_weights[name]
 
-    # Whole-body CoM in world frame: (num_envs, 3)
-    total_mass = masses.sum(dim=-1, keepdim=True)  # (num_envs, 1)
-    whole_com_w = (body_com_w * masses.unsqueeze(-1)).sum(dim=1) / total_mass  # (num_envs, 3)
-
-    # Base position in world frame
-    base_pos_w = robot.data.root_pos_w  # (num_envs, 3)
-
-    # Vector from base to CoM in world frame
-    com_offset_w = whole_com_w - base_pos_w  # (num_envs, 3)
-
-    # Rotate into base frame
-    com_offset_b = quat_apply_inverse(robot.data.root_quat_w, com_offset_w)  # (num_envs, 3)
-
-    # XY distance in base frame (how far CoM projects from base center)
-    com_xy_dist_sq = com_offset_b[:, 0] ** 2 + com_offset_b[:, 1] ** 2
-
-    return com_xy_dist_sq
+    return result

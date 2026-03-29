@@ -68,12 +68,33 @@ ADELINO_CFG = ArticulationCfg(
         },
     ),
     actuators={
-        "servo_actuators": ImplicitActuatorCfg(
-            joint_names_expr=ADELINO_ACTUATED_JOINTS,
-            stiffness=500.0,
-            damping=10.0,
-            effort_limit_sim=50.0,
+        # Per-joint actuators with real servo torque limits (kg·cm → N·m: multiply by 0.098)
+        "joint_1_act": ImplicitActuatorCfg(
+            joint_names_expr=["joint_1"],
+            stiffness=500.0, damping=10.0,
+            effort_limit_sim=2.45,   # HK15338: 25.0 kg·cm
         ),
+        "joint_2_act": ImplicitActuatorCfg(
+            joint_names_expr=["joint_2"],
+            stiffness=500.0, damping=10.0,
+            effort_limit_sim=1.96,   # HK15298B: 20.0 kg·cm
+        ),
+        "joint_3_act": ImplicitActuatorCfg(
+            joint_names_expr=["joint_3"],
+            stiffness=500.0, damping=10.0,
+            effort_limit_sim=1.25,   # HK15328A: 12.8 kg·cm
+        ),
+        "joint_4_act": ImplicitActuatorCfg(
+            joint_names_expr=["joint_4"],
+            stiffness=500.0, damping=10.0,
+            effort_limit_sim=0.42,   # HK15138: 4.3 kg·cm
+        ),
+        "joint_5_act": ImplicitActuatorCfg(
+            joint_names_expr=["joint_5"],
+            stiffness=500.0, damping=10.0,
+            effort_limit_sim=0.14,   # HK15178: 1.4 kg·cm
+        ),
+        # Passive wobble joints
         "wobble_joints": ImplicitActuatorCfg(
             joint_names_expr=[".*wobble.*"],
             stiffness=0.0,
@@ -180,6 +201,12 @@ class ObservationsCfg:
             func=mdp.base_ang_vel,
             noise=Unoise(n_min=-0.2, n_max=0.2),
         )
+        # CoM vertical projection onto support plane — XY offset from base center
+        # This correctly detects CoM drift even on tilted platforms
+        com_projection = ObsTerm(
+            func=adelino_mdp.com_projection_on_support,
+            noise=Unoise(n_min=-0.005, n_max=0.005),
+        )
         # Joint positions — actuated joints only
         joint_pos = ObsTerm(
             func=mdp.joint_pos_rel,
@@ -213,18 +240,35 @@ class RewardsCfg:
 
     # --- Task rewards ---
     # Positive reward for staying alive (not terminated)
-    is_alive = RewTerm(func=mdp.is_alive, weight=1.0)
+    is_alive = RewTerm(func=mdp.is_alive, weight=2.0)
     # Stay upright: penalize base tilt from horizontal
     flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
-    # Keep CoM over support polygon
-    com_projection = RewTerm(func=adelino_mdp.com_projection_penalty, weight=-10.0)
+    # Keep CoM projection centered on support polygon (primary balance signal)
+    com_projection = RewTerm(func=adelino_mdp.com_projection_penalty, weight=-50.0)
 
-    # --- Regularization penalties ---
-    dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    dof_torques_l2 = RewTerm(func=mdp.joint_torques_l2, weight=-1.0e-5)
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
-    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
-    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
+    # --- Regularization penalties (kept light so lower joints aren't discouraged) ---
+    dof_acc_l2 = RewTerm(
+        func=mdp.joint_acc_l2, weight=-1.0e-8,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=ADELINO_ACTUATED_JOINTS)},
+    )
+    # Per-joint torque penalty: lower joints (balance) are cheap, upper joints (expression) are expensive
+    # joint_1 (yaw) and joint_2 (pitch) are the primary balance actuators
+    dof_torques_weighted = RewTerm(
+        func=adelino_mdp.weighted_joint_torques,
+        weight=-1.0e-6,
+        params={
+            "joint_weights": {
+                "joint_1": 0.1,   # Base yaw — free to use for balance
+                "joint_2": 0.2,   # Lower pitch — free to use for balance
+                "joint_3": 0.5,   # Mid pitch — moderate
+                "joint_4": 2.0,   # Upper roll — prefer quiet
+                "joint_5": 5.0,   # Head — strongly prefer quiet
+            },
+        },
+    )
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.001)
+    ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.01)
+    lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.5)
 
 
 ##

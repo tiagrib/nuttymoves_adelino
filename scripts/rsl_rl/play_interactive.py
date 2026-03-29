@@ -224,17 +224,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
             robot.write_joint_state_to_sim(joint_pos, joint_vel)
             print("  [Robot reset to upright]                    ")
 
-        # Update platform orientation
-        roll_rad = torch.tensor([math.radians(tilt_roll)], device=device).expand(num_envs)
-        pitch_rad = torch.tensor([math.radians(tilt_pitch)], device=device).expand(num_envs)
-        yaw_rad = torch.zeros(num_envs, device=device)
-        quat = quat_from_euler_xyz(roll_rad, pitch_rad, yaw_rad)
-        pos = platform.data.default_root_state[:, :3].clone()
-        platform.write_root_pose_to_sim(torch.cat([pos, quat], dim=-1))
+        # Update platform orientation (must be outside inference_mode)
+        with torch.no_grad():
+            roll_rad = torch.tensor([math.radians(tilt_roll)], device=device).expand(num_envs)
+            pitch_rad = torch.tensor([math.radians(tilt_pitch)], device=device).expand(num_envs)
+            yaw_rad = torch.zeros(num_envs, device=device)
+            quat = quat_from_euler_xyz(roll_rad, pitch_rad, yaw_rad)
+            pos = platform.data.root_pos_w.clone()
+            platform.write_root_pose_to_sim(torch.cat([pos, quat], dim=-1))
 
         # Step policy
         with torch.inference_mode():
             actions = policy(obs)
+        with torch.no_grad():
             obs, _, dones, _ = env.step(actions)
             if version.parse(installed_version) >= version.parse("4.0.0"):
                 policy.reset(dones)
@@ -287,21 +289,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
         # GREEN dot — robot base position
         draw.draw_points([(bx, by, bz)], [(0.2, 1.0, 0.2, 1.0)], [20.0])
 
-        # WHITE dot — whole-body CoM projected vertically onto platform height
-        body_com_w = robot.data.body_com_pos_w  # (1, num_bodies, 3)
-        masses = robot.data.default_mass.to(body_com_w.device)  # (1, num_bodies)
+        # --- CoM projection visualization ---
+        # Compute whole-body CoM in world frame
+        body_com_w = robot.data.body_com_pos_w
+        masses = robot.data.default_mass.to(body_com_w.device)
         total_mass = masses.sum(dim=-1, keepdim=True)
-        whole_com_w = (body_com_w * masses.unsqueeze(-1)).sum(dim=1) / total_mass  # (1, 3)
+        whole_com_w = (body_com_w * masses.unsqueeze(-1)).sum(dim=1) / total_mass
         cx, cy, cz = whole_com_w[0, 0].item(), whole_com_w[0, 1].item(), whole_com_w[0, 2].item()
-        # Draw CoM as a magenta dot
+
+        # MAGENTA dot — actual CoM position in 3D
         draw.draw_points([(cx, cy, cz)], [(1.0, 0.3, 1.0, 1.0)], [20.0])
-        # Draw vertical projection line from CoM down to platform level
+
+        # Project CoM vertically onto the support plane (same math as the observation)
+        # The support plane passes through the base position with the base's Z as normal
+        from isaaclab.utils.math import quat_apply_inverse
+        local_z = torch.tensor([[0.0, 0.0, 1.0]], device=device)
+        plane_normal = quat_apply(robot.data.root_quat_w[0:1], local_z)[0].cpu()
+        com_to_base = whole_com_w[0].cpu() - root_pos
+        dot_num = (plane_normal * com_to_base).sum()
+        dot_den = max(plane_normal[2].item(), 0.1)
+        t = dot_num / dot_den
+        proj_x = cx
+        proj_y = cy
+        proj_z = cz - t.item()
+
+        # MAGENTA line — vertical drop from CoM to support plane
         draw.draw_lines(
-            [(cx, cy, cz)], [(cx, cy, PLATFORM_HEIGHT)],
-            [(1.0, 0.3, 1.0, 0.5)], [2.0],
+            [(cx, cy, cz)], [(proj_x, proj_y, proj_z)],
+            [(1.0, 0.3, 1.0, 0.5)], [3.0],
         )
-        # Draw projected point on platform (WHITE — this must stay inside support polygon)
-        draw.draw_points([(cx, cy, PLATFORM_HEIGHT)], [(1.0, 1.0, 1.0, 1.0)], [20.0])
+        # WHITE dot — projected point on support plane (must stay near base center)
+        draw.draw_points([(proj_x, proj_y, proj_z)], [(1.0, 1.0, 1.0, 1.0)], [25.0])
 
         if step_count % 25 == 0:
             print(
