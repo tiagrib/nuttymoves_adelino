@@ -6,7 +6,7 @@ The robot must physically balance on the tilting surface.
 Controls:
     Arrow Up/Down   - Tilt platform pitch
     Arrow Left/Right - Tilt platform roll
-    R               - Reset platform to level
+    R               - Reset scene (robot upright + platform level)
 """
 
 """Launch Isaac Sim Simulator first."""
@@ -106,8 +106,8 @@ def setup_keyboard():
     print("\n=== Interactive Platform Controls ===")
     print("  Arrow Up/Down   : Tilt pitch")
     print("  Arrow Left/Right: Tilt roll")
-    print("  R               : Reset platform to level")
-    print("  SPACE           : Reset robot (upright on platform)")
+    print("  R               : Reset scene (robot + platform)")
+    print("  SPACE           : Reset robot only (upright on platform)")
     print("=====================================\n")
 
 
@@ -127,6 +127,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     env_cfg.events.reset_gravity = None
     env_cfg.events.tilt_gravity = None
     env_cfg.events.push_robot = None
+    # Disable automatic platform tilting — keyboard controls it instead
+    env_cfg.events.new_tilt_target = None
+    env_cfg.events.smooth_tilt = None
+    env_cfg.events.reset_platform = None
     # No observation noise
     env_cfg.observations.policy.enable_corruption = False
     # Very long episode so it effectively never resets
@@ -179,11 +183,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     device = env.unwrapped.device
     num_envs = env.unwrapped.num_envs
 
-    # Force-set effort limits at runtime (USD D6 joints may have Max Force = 0)
-    num_joints = robot.num_joints
-    effort_limits = torch.full((num_envs, num_joints), 50.0, device=device)
-    robot.write_joint_effort_limit_to_sim(effort_limits)
-    print(f"[INFO]: Set effort limits to 50.0 for {num_joints} joints")
+    # Log actuator effort limits for debugging
+    print(f"[INFO]: Effort limits from actuator config: {robot.data.joint_effort_limits[0].cpu().tolist()}")
 
     setup_keyboard()
 
@@ -194,13 +195,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg, agent_cfg: RslRlBaseRunnerCfg):
     obs = env.get_observations()
     step_count = 0
 
-    print(f"[INFO]: Ready. Arrow keys to tilt (max +/-{max_tilt} deg), R to reset level.")
+    print(f"[INFO]: Ready. Arrow keys to tilt (max +/-{max_tilt} deg), R to reset scene.")
 
     while simulation_app.is_running():
         # Read keyboard
         if key_states["reset"]:
+            key_states["reset"] = False
             tilt_pitch = 0.0
             tilt_roll = 0.0
+            # Reset robot to upright on level platform
+            robot = env.unwrapped.scene["robot"]
+            default_state = robot.data.default_root_state.clone()
+            default_state[:, :3] = torch.tensor([[0.0, 0.0, PLATFORM_HEIGHT + 0.01]], device=device)
+            robot.write_root_state_to_sim(default_state)
+            joint_pos = robot.data.default_joint_pos.clone()
+            joint_vel = torch.zeros_like(joint_pos)
+            robot.write_joint_state_to_sim(joint_pos, joint_vel)
+            print("  [Scene reset: robot + platform]             ")
         if key_states["up"]:
             tilt_pitch = min(tilt_pitch + tilt_speed, max_tilt)
         if key_states["down"]:

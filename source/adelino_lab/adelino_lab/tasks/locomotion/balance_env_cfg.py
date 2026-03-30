@@ -168,7 +168,7 @@ class ActionsCfg:
     joint_pos = mdp.JointPositionActionCfg(
         asset_name="robot",
         joint_names=ADELINO_ACTUATED_JOINTS,
-        scale=0.25,
+        scale=0.5,
         use_default_offset=True,
     )
 
@@ -241,10 +241,14 @@ class RewardsCfg:
     # --- Task rewards ---
     # Positive reward for staying alive (not terminated)
     is_alive = RewTerm(func=mdp.is_alive, weight=2.0)
-    # Stay upright: penalize base tilt from horizontal
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
-    # Keep CoM projection centered on support polygon (primary balance signal)
-    com_projection = RewTerm(func=adelino_mdp.com_projection_penalty, weight=-50.0)
+    # NOTE: flat_orientation_l2 removed — on a tilted platform the base MUST tilt,
+    # so penalizing tilt fights the counterbalance behavior we want.
+    # Lightly penalize CoM drifting far from base (prevents runaway, not the primary signal)
+    com_projection = RewTerm(func=adelino_mdp.com_projection_penalty, weight=-5.0)
+    # Primary balance signal: reward shifting CoM uphill when platform tilts
+    com_counterbalance = RewTerm(func=adelino_mdp.com_counterbalance_reward, weight=30.0)
+    # Reward keeping the head high — encourages upright/extended posture over curling
+    head_height = RewTerm(func=adelino_mdp.head_height_reward, weight=5.0)
 
     # --- Regularization penalties (kept light so lower joints aren't discouraged) ---
     dof_acc_l2 = RewTerm(
@@ -336,7 +340,7 @@ class EventCfg:
         func=adelino_mdp.tilt_platform_step,
         mode="interval",
         interval_range_s=(0.02, 0.02),
-        params={"lerp_rate": 0.02, "max_lerp_multiplier": 5.0},
+        params={"lerp_rate": 0.02, "max_lerp_multiplier": 8.0},
     )
     # Push the robot occasionally
     push_robot = EventTerm(

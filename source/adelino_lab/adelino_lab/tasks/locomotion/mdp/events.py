@@ -63,38 +63,30 @@ def tilt_platform_step(
     move the platform toward its target tilt.
 
     The lerp speed increases as training progresses:
-        0-66%:   1x lerp_rate
-        66-90%:  ramp 1x → 3x
-        90-100%: ramp 3x → max_lerp_multiplier (5x)
+        0-33%:   1x lerp_rate
+        33-66%:  ramp 1x → 3x
+        66-100%: ramp 3x → max_lerp_multiplier
     """
     platform: RigidObject = env.scene[asset_cfg.name]
     device = platform.device
     state = _get_platform_state(platform, device)
 
     # Compute speed multiplier based on training progress
-    # Use sim step counter as a proxy for training progress
     step = env._sim_step_counter // env.cfg.decimation
-    # Estimate total steps: max_iterations * num_steps_per_env * num_envs
-    # We don't know max_iterations, so use step-based milestones.
-    # With 5000 iters, 24 steps/env, 256 envs: ~30M steps total
-    # Scale-independent: use fraction of steps where behavior changes
-    # We'll use a simple schedule based on absolute step counts
-    # that works across different num_envs/max_iterations
     if not hasattr(tilt_platform_step, "_total_steps_estimate"):
-        # Estimate once from the runner config if available, otherwise use a default
         tilt_platform_step._total_steps_estimate = 30_000_000  # reasonable default
 
     progress = min(step / max(tilt_platform_step._total_steps_estimate, 1), 1.0)
 
-    if progress < 0.66:
+    if progress < 0.33:
         multiplier = 1.0
-    elif progress < 0.90:
+    elif progress < 0.66:
         # Ramp from 1x to 3x
-        t = (progress - 0.66) / 0.24
+        t = (progress - 0.33) / 0.33
         multiplier = 1.0 + t * 2.0
     else:
         # Ramp from 3x to max
-        t = (progress - 0.90) / 0.10
+        t = (progress - 0.66) / 0.34
         multiplier = 3.0 + t * (max_lerp_multiplier - 3.0)
 
     effective_rate = lerp_rate * multiplier
