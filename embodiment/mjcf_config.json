@@ -1,0 +1,91 @@
+{
+  "kinematics_input": "v1/kinematics.json",
+  "output": "v1/mjcf/adelino.xml",
+  "mesh_dir": "../meshes",
+  "scale": 1,
+  "align_joints_to_z": true,
+  "_comment_align": "Rotate body frames so all joints use Z-axis. Geom quats counter-rotate to preserve visual orientation.",
+  "options": {
+    "timestep": 0.002,
+    "gravity": -9.81
+  },
+  "joint_defaults": {
+    "range": [
+      -1.5708,
+      1.5708
+    ],
+    "damping": 0.01,
+    "armature": 0.005
+  },
+  "wobble": {
+    "enabled": true,
+    "range": 0.02,
+    "damping": 50,
+    "armature": 0.15
+  },
+  "inertials": {
+    "base": {
+      "mass": 0.095,
+      "diaginertia": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    },
+    "link1": {
+      "mass": 0.125,
+      "diaginertia": [
+        0.0001,
+        0.0001,
+        0.0001
+      ]
+    },
+    "link2": {
+      "mass": 0.123,
+      "diaginertia": [
+        0.0001,
+        0.0001,
+        0.0001
+      ]
+    },
+    "link3": {
+      "mass": 0.042,
+      "diaginertia": [
+        0.0001,
+        0.0001,
+        0.0001
+      ]
+    },
+    "link4": {
+      "mass": 0.013,
+      "diaginertia": [
+        0.00005,
+        0.00005,
+        0.00005
+      ]
+    },
+    "head": {
+      "mass": 0.067,
+      "diaginertia": [
+        0.00005,
+        0.00005,
+        0.00005
+      ]
+    }
+  },
+  "actuator_defaults": {
+    "type": "position",
+    "kp": 500,
+    "kv": 10,
+    "effort_limit": 50
+  },
+  "joint_friction": {
+    "_comment": "PhysX joint friction coefficients. MJCF friction attr is not imported, so we set via API after loading. Joint names must match USD prim names (link1, link2, etc. for isaaclab converter; joint_1, joint_2 for native importer).",
+    "default": 0.005,
+    "per_joint": {
+      "link1": 0.03,
+      "link2": 0.03,
+      "link3": 0.03
+    }
+  }
+}

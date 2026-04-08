@@ -1,0 +1,48 @@
+#ifndef ADELINO_CONFIG_H
+#define ADELINO_CONFIG_H
+
+// ============================================================
+// Adelino Robot - Arduino Mega 2560 Configuration
+// ============================================================
+
+// -- Servo Configuration --
+#define NUM_JOINTS       5
+#define SERVO_PIN_J1     2    // Base Yaw (HK15338)
+#define SERVO_PIN_J2     3    // Pitch (HK15298B)
+#define SERVO_PIN_J3     4    // Pitch (HK15328A)
+#define SERVO_PIN_J4     5    // Roll (HK15138)
+#define SERVO_PIN_J5     6    // Head Yaw (HK15178)
+
+// Per-joint PWM safety limits (microseconds)
+#define PWM_MIN_J1       1000
+#define PWM_MAX_J1       2000
+#define PWM_MIN_J2       1000
+#define PWM_MAX_J2       2000
+#define PWM_MIN_J3       1000
+#define PWM_MAX_J3       2000
+#define PWM_MIN_J4       1000
+#define PWM_MAX_J4       2000
+#define PWM_MIN_J5       1000
+#define PWM_MAX_J5       2000
+
+#define PWM_NEUTRAL      1500
+
+// -- Serial Communication --
+#define SERIAL_BAUD      115200
+
+// -- Timing --
+#define CONTROL_RATE_HZ  50
+#define STATE_INTERVAL_MS (1000 / CONTROL_RATE_HZ)
+#define WATCHDOG_TIMEOUT_MS 500
+
+// -- Status LED --
+#define STATUS_LED       13
+
+// -- IMU (optional) --
+// Set to 1 to compile with BNO085 IMU support on I2C
+// Set to 0 to compile without IMU (state packets use type 0x02)
+#define IMU_ENABLED      0
+#define IMU_SDA          20
+#define IMU_SCL          21
+
+#endif // ADELINO_CONFIG_H

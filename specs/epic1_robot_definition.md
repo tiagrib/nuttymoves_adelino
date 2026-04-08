@@ -53,7 +53,7 @@ Create the complete robot definition for Adelino, from Blender geometry through 
 ### Current File Inventory
 
 ```
-embodiments/adelino/
+embodiment/
 ├── Adelino.blend                  # Blender source (collections + pivot empties)
 ├── export_config.json             # Blender export configuration
 ├── mjcf_config.json               # MJCF generation configuration (placeholder values)

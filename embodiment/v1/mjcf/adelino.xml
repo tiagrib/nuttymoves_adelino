@@ -1,0 +1,80 @@
+<mujoco model="adelino">
+  <compiler angle="radian" meshdir="../meshes" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+  <default>
+    <joint damping="0.01" armature="0.005"/>
+    <geom condim="4" friction="1 0.5 0.5"/>
+  </default>
+  <asset>
+    <mesh name="base_visual" file="visual/base.obj"/>
+    <mesh name="link1_visual" file="visual/link1.obj"/>
+    <mesh name="link2_visual" file="visual/link2.obj"/>
+    <mesh name="link3_visual" file="visual/link3.obj"/>
+    <mesh name="link4_visual" file="visual/link4.obj"/>
+    <mesh name="head_visual" file="visual/head.obj"/>
+  </asset>
+  <worldbody>
+    <body name="base" pos="0 0 0">
+      <inertial pos="0 0 0" mass="0.095" diaginertia="0.001 0.001 0.001"/>
+      <geom type="mesh" mesh="base_visual" contype="0" conaffinity="0" group="1" name="base_visual"/>
+      <geom type="mesh" mesh="base_visual" group="2" name="base_collision"/>
+
+      <body name="link1" pos="0 0.0 0.042642">
+        
+        <joint name="joint_1_wobble_a" type="hinge" axis="1.000000 0.000000 0.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+        <joint name="joint_1_wobble_b" type="hinge" axis="0.000000 1.000000 0.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+        <joint name="joint_1" type="hinge" axis="0 0 1" range="-1.5708 1.5708" friction="10.0"/>
+        <inertial pos="0 0 0" mass="0.125" diaginertia="0.0001 0.0001 0.0001"/>
+        <geom type="mesh" mesh="link1_visual" contype="0" conaffinity="0" group="1" name="link1_visual"/>
+        <geom type="mesh" mesh="link1_visual" group="2" name="link1_collision"/>
+
+        <body name="link2" pos="0.027163 0.0 0.067891" quat="0.7071067811865476 0.7071067811865476 0.0 0.0">
+          
+          <joint name="joint_2" type="hinge" axis="1 0 0" range="-1.5708 1.5708" friction="10.0"/>
+          <joint name="joint_2_wobble_b" type="hinge" axis="0.000000 1.000000 0.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+          <joint name="joint_2_wobble_a" type="hinge" axis="0.000000 0.000000 1.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+          <inertial pos="0 0 0" mass="0.123" diaginertia="0.0001 0.0001 0.0001"/>
+          <geom type="mesh" mesh="link2_visual" contype="0" conaffinity="0" group="1" name="link2_visual" quat="0.7071067811865476 -0.7071067811865476 -0.0 -0.0"/>
+          <geom type="mesh" mesh="link2_visual" group="2" name="link2_collision" quat="0.7071067811865476 -0.7071067811865476 -0.0 -0.0"/>
+
+          <body name="link3" pos="-0.010227 0.098201 0.0" quat="0.7071067811865476 0.7071067811865476 0.0 0.0">
+
+            <joint name="joint_3" type="hinge" axis="1 0 0" range="-1.5708 1.5708" friction="10.0"/>
+            <joint name="joint_3_wobble_b" type="hinge" axis="0.000000 1.000000 0.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+            <joint name="joint_3_wobble_a" type="hinge" axis="0.000000 0.000000 1.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+            <inertial pos="0 0 0" mass="0.042" diaginertia="0.0001 0.0001 0.0001"/>
+            <geom type="mesh" mesh="link3_visual" contype="0" conaffinity="0" group="1" name="link3_visual" quat="0.0 -1.0000000000000002 0.0 0.0"/>
+            <geom type="mesh" mesh="link3_visual" group="2" name="link3_collision" quat="0.0 -1.0000000000000002 0.0 0.0"/>
+
+            <body name="link4" pos="-0.018283 -0.015676 -0.103314" quat="0.7071067811865476 -0.0 0.7071067811865476 0.0">
+              
+              <joint name="joint_4_wobble_a" type="hinge" axis="1.000000 0.000000 0.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+              <joint name="joint_4" type="hinge" axis="0 1 0" range="-1.5708 1.5708"  friction="5.0"/>
+              <joint name="joint_4_wobble_b" type="hinge" axis="0.000000 0.000000 1.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+              <inertial pos="0 0 0" mass="0.013" diaginertia="5e-05 5e-05 5e-05"/>
+              <geom type="mesh" mesh="link4_visual" contype="0" conaffinity="0" group="1" name="link4_visual" quat="0.0 -0.7071067811865477 0.0 -0.7071067811865477"/>
+              <geom type="mesh" mesh="link4_visual" group="2" name="link4_collision" quat="0.0 -0.7071067811865477 0.0 -0.7071067811865477"/>
+
+              <body name="head" pos="0.11543900000000004 0.01557099999999996 0.0">
+                
+                <joint name="joint_5" type="hinge" axis="1 0 0" range="-1.5708 1.5708"  friction="5.0"/>
+                <joint name="joint_5_wobble_b" type="hinge" axis="0.000000 1.000000 0.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+                <joint name="joint_5_wobble_a" type="hinge" axis="0.000000 0.000000 1.000000" range="-0.02 0.02" damping="50" armature="0.15"/>
+                <inertial pos="0 0 0" mass="0.067" diaginertia="5e-05 5e-05 5e-05"/>
+                <geom type="mesh" mesh="head_visual" contype="0" conaffinity="0" group="1" name="head_visual" quat="0.0 -0.7071067811865477 0.0 -0.7071067811865477"/>
+                <geom type="mesh" mesh="head_visual" group="2" name="head_collision" quat="0.0 -0.7071067811865477 0.0 -0.7071067811865477"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="joint_1_actuator" joint="joint_1" kp="500" kv="10" forcelimit="50"/>
+    <position name="joint_2_actuator" joint="joint_2" kp="500" kv="10" forcelimit="50"/>
+    <position name="joint_3_actuator" joint="joint_3" kp="500" kv="10" forcelimit="50"/>
+    <position name="joint_4_actuator" joint="joint_4" kp="500" kv="10" forcelimit="50"/>
+    <position name="joint_5_actuator" joint="joint_5" kp="500" kv="10" forcelimit="50"/>
+  </actuator>
+</mujoco>

@@ -19,12 +19,12 @@ Step-by-step instructions for setting up, calibrating, and controlling the Adeli
 
 ## 2. Prerequisites
 
-**Working directory:** All `adelino-standalone` commands in this guide assume you are in the `controllers/` directory (the Cargo workspace root).
+**Working directory:** All `adelino-standalone` commands in this guide assume you are in the `projects/adelino/` directory (the Adelino Cargo workspace root).
 
 **Build the binary:**
 
 ```
-cd controllers
+cd projects/adelino
 cargo build --release -p adelino-standalone
 ```
 
@@ -66,7 +66,7 @@ With the Arduino connected via USB:
 adelino-standalone flash --port COM3
 ```
 
-This compiles and uploads the firmware from `controllers/firmware/adelino/` to the Arduino Mega 2560.
+This compiles and uploads the firmware from `firmware/` to the Arduino Mega 2560.
 
 The default `--fqbn` is `arduino:avr:mega:cpu=atmega2560`. If using a different board, override it:
 
@@ -77,7 +77,7 @@ adelino-standalone flash --port COM3 --fqbn arduino:avr:mega:cpu=atmega2560
 If the firmware directory is not found automatically, specify it:
 
 ```
-adelino-standalone flash --port COM3 --firmware-dir path/to/controllers/firmware/adelino
+adelino-standalone flash --port COM3 --firmware-dir path/to/projects/adelino/firmware
 ```
 
 ## 5. Run the Controller

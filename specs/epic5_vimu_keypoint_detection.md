@@ -11,7 +11,7 @@
 
 Migrate VIMU from direct angle regression to keypoint detection + geometric solving for principled viewpoint invariance and auto-calibration. The current `VimuModel` (in `vimu/training/model.py`) uses a ResNet-18 backbone with a fully-connected regression head that directly maps a 224x224 RGB image to `[joint_1, ..., joint_5, base_roll, base_pitch]`. This approach is inherently tied to the camera pose seen during training -- any change in camera placement requires recollecting data and retraining.
 
-Phase A replaces the regression head with a heatmap decoder that detects 2D keypoint locations on the robot body. Given known 3D geometry (from `embodiments/adelino/v1/kinematics.json`), a PnP solver recovers camera pose and an inverse kinematics solver recovers joint angles. This decouples the vision model from camera placement entirely and enables a one-time auto-calibration workflow.
+Phase A replaces the regression head with a heatmap decoder that detects 2D keypoint locations on the robot body. Given known 3D geometry (from `embodiment/v1/kinematics.json`), a PnP solver recovers camera pose and an inverse kinematics solver recovers joint angles. This decouples the vision model from camera placement entirely and enables a one-time auto-calibration workflow.
 
 ## Goals
 
@@ -59,7 +59,7 @@ The output contract (VIMU WebSocket API, `metak-shared/api-contracts/vimu-websoc
 
 ## Keypoint Definition
 
-Seven keypoints are defined at anatomically significant locations on the Adelino robot. Their 3D positions in the base frame at neutral pose (all joints = 0) are derived from the joint origins in `embodiments/adelino/v1/kinematics.json`:
+Seven keypoints are defined at anatomically significant locations on the Adelino robot. Their 3D positions in the base frame at neutral pose (all joints = 0) are derived from the joint origins in `embodiment/v1/kinematics.json`:
 
 | Index | Name | 3D Position (meters, base frame, neutral pose) | Description |
 |-------|------|-------------------------------------------------|-------------|
@@ -162,7 +162,7 @@ loss = lambda_heatmap * MSE(pred_heatmaps, target_heatmaps) + lambda_coord * L1(
 
 ## Forward Kinematics Module
 
-Computes 3D positions of the 7 keypoints given 5 joint angles, using the kinematic chain from `embodiments/adelino/v1/kinematics.json`.
+Computes 3D positions of the 7 keypoints given 5 joint angles, using the kinematic chain from `embodiment/v1/kinematics.json`.
 
 ### Kinematic Chain
 
@@ -437,7 +437,7 @@ Add a `--keypoints` flag to the `sweep` subcommand:
 ```
 python collect.py sweep --ws ws://localhost:8765 \
     --camera 0 --num-joints 5 --num-poses 1500 --output-dir ./data \
-    --keypoints --kinematics ../../embodiments/adelino/v1/kinematics.json \
+    --keypoints --kinematics embodiment/v1/kinematics.json \
     --camera-matrix 600,600,320,240
 ```
 

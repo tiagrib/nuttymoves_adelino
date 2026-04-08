@@ -22,7 +22,7 @@ from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 import isaaclab.envs.mdp as mdp
 import adelino_lab.tasks.locomotion.mdp as adelino_mdp
 
-ADELINO_USD_PATH = "C:/repo/nuttymoves/embodiments/adelino/v1/usd/adelino_fixed.usd"
+ADELINO_USD_PATH = "C:/repo/nuttymoves/projects/adelino/embodiment/v1/usd/adelino_fixed.usd"
 
 # Joint names for the 5 actuated DOFs (excludes wobble joints)
 ADELINO_ACTUATED_JOINTS = [

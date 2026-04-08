@@ -1,0 +1,142 @@
+{
+  "robot_name": "adelino",
+  "links": [
+    {
+      "name": "base",
+      "collection": "Base",
+      "joint_origin": [
+        0.0,
+        -0.0,
+        0.0
+      ],
+      "mesh_file": "base.obj"
+    },
+    {
+      "name": "link1",
+      "collection": "Asset_1",
+      "joint_origin": [
+        0.0,
+        -0.0,
+        0.042642
+      ],
+      "mesh_file": "link1.obj"
+    },
+    {
+      "name": "link2",
+      "collection": "Asset_2",
+      "joint_origin": [
+        0.0,
+        0.027163,
+        0.110533
+      ],
+      "mesh_file": "link2.obj"
+    },
+    {
+      "name": "link3",
+      "collection": "Asset_3",
+      "joint_origin": [
+        0.0,
+        0.016936,
+        0.208734
+      ],
+      "mesh_file": "link3.obj"
+    },
+    {
+      "name": "link4",
+      "collection": "Asset_4",
+      "joint_origin": [
+        -0.015653,
+        -0.001347,
+        0.312049
+      ],
+      "mesh_file": "link4.obj"
+    },
+    {
+      "name": "head",
+      "collection": "Asset_5",
+      "joint_origin": [
+        0.0,
+        -0.001347,
+        0.427487
+      ],
+      "mesh_file": "head.obj"
+    }
+  ],
+  "joints": [
+    {
+      "name": "joint_1",
+      "parent": "base",
+      "child": "link1",
+      "offset": [
+        0.0,
+        -0.0,
+        0.042642
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "name": "joint_2",
+      "parent": "link1",
+      "child": "link2",
+      "offset": [
+        0.0,
+        0.027163,
+        0.067891
+      ],
+      "axis": [
+        0,
+        -1,
+        0
+      ]
+    },
+    {
+      "name": "joint_3",
+      "parent": "link2",
+      "child": "link3",
+      "offset": [
+        0.0,
+        -0.010227,
+        0.098201
+      ],
+      "axis": [
+        0,
+        -1,
+        0
+      ]
+    },
+    {
+      "name": "joint_4",
+      "parent": "link3",
+      "child": "link4",
+      "offset": [
+        -0.015653,
+        -0.018283,
+        0.103314
+      ],
+      "axis": [
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "joint_5",
+      "parent": "link4",
+      "child": "head",
+      "offset": [
+        0.015653,
+        -0.0,
+        0.115439
+      ],
+      "axis": [
+        0,
+        0,
+        1
+      ]
+    }
+  ]
+}

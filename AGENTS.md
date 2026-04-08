@@ -5,7 +5,13 @@ Read the root `AGENTS.md` first for global rules, project structure, and coding 
 
 ## Repo Overview
 
-<!-- Describe what this repo does and its role in the system. -->
+This repo contains everything Adelino-specific:
+- Standalone Rust controller binary (`standalone/`)
+- Arduino firmware (`firmware/`)
+- Robot embodiment assets (`embodiment/`)
+- Isaac Lab RL training (`source/adelino_lab/`)
+- Deployment bridge (`deployment/`)
+- User guides (`guides/`)
 
 ## Agent Rules
 

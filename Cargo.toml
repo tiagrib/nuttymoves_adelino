@@ -1,0 +1,3 @@
+[workspace]
+members = ["standalone"]
+resolver = "2"

@@ -107,7 +107,7 @@ export PATH="$USERPROFILE/.cargo/bin:$PATH"
 ### Build the Controller
 
 ```
-cd controllers
+cd projects/adelino
 cargo build --release
 ```
 
@@ -144,16 +144,9 @@ After installing Isaac Lab:
 ## Workspace Structure
 
 ```
-nuttymoves/
+nuttymoves/                       Root framework (generic robotics)
 ├── controllers/                  Rust Arduino controller infrastructure
-│   ├── arduino-controller/       Reusable library crate (serial, WebSocket, calibration)
-│   ├── adelino-standalone/       Binary: WebSocket server bridging commands to Arduino
-│   │   └── src/
-│   │       ├── main.rs           CLI: run, flash, calibrate, test subcommands
-│   │       └── adelino_config.rs Joint config (pins, PWM ranges, servo models)
-│   └── firmware/
-│       └── adelino/              Arduino C++ firmware (50Hz servo loop, serial protocol)
-│           └── config.h          Pin assignments, PWM limits, timing, IMU toggle
+│   └── arduino-controller/       Reusable library crate (serial, WebSocket, calibration)
 │
 ├── vimu/                         Vision-based proprioception (standalone, no nuttymoves dependency)
 │   ├── training/                 Python: data collection, ResNet-18 training, ONNX export
@@ -165,7 +158,14 @@ nuttymoves/
 │   └── inference/                Rust: real-time ONNX inference + EKF + WebSocket broadcast
 │       └── src/main.rs           CLI: --model, --camera, --port, --display
 │
-├── projects/adelino/             Adelino-specific project (leaf node, depends on both above)
+├── projects/adelino/             Adelino-specific project (this repo, submodule)
+│   ├── standalone/               Binary: adelino-standalone (WebSocket-to-Arduino bridge)
+│   │   └── src/
+│   │       ├── main.rs           CLI: run, flash, calibrate, test subcommands
+│   │       └── adelino_config.rs Joint config (pins, PWM ranges, servo models)
+│   ├── firmware/                 Arduino C++ firmware (50Hz servo loop, serial protocol)
+│   │   └── config.h              Pin assignments, PWM limits, timing, IMU toggle
+│   ├── embodiment/               Robot assets (Blender model, MJCF, USD, kinematics)
 │   ├── source/adelino_lab/       Isaac Lab RL training (balance task, PPO)
 │   ├── deployment/               Sim-to-real bridge
 │   │   ├── policy_runner.py      Reads VIMU state, runs policy, sends commands (30Hz loop)
@@ -174,9 +174,6 @@ nuttymoves/
 │   │   └── requirements.txt      Deployment Python dependencies
 │   ├── scripts/                  Training and playback scripts
 │   └── guides/                   This documentation
-│
-├── embodiments/                  Robot definitions (MJCF, USD, kinematics)
-│   └── adelino/                  Shared source of truth for Adelino geometry
 │
 ├── scripts/                      Reusable Python utilities
 │
@@ -189,7 +186,8 @@ nuttymoves/
 
 ### Key dependency rules
 
-- `controllers/` is reusable and has no dependency on `vimu/` or `projects/adelino/`.
+- `controllers/arduino-controller` is reusable and has no dependency on `vimu/` or `projects/adelino/`.
 - `vimu/` is standalone and has no dependency on `nuttymoves` or `projects/adelino/`.
 - `projects/adelino/` is the leaf node that integrates both at runtime via WebSocket APIs.
-- Cross-component communication happens exclusively through WebSocket JSON, shared embodiment files, and ONNX model files.
+- `adelino-standalone` depends on `arduino-controller` via a Cargo git dependency.
+- Cross-component communication happens exclusively through WebSocket JSON and ONNX model files.

@@ -1,0 +1,99 @@
+{
+  "robot_name": "adelino",
+  "blend_file": "Adelino.blend",
+  "output_dir": "v1/meshes/visual",
+  "collision_output_dir": "v1/meshes/collision",
+  "kinematics_output": "v1/kinematics.json",
+  "_comment": "Set dry_run to true to validate without exporting (or use --dry-run flag)",
+  "dry_run": false,
+  "align_joints_to_z": false,
+  "_comment_align": "Keep false - alignment is done at MJCF generation time instead (with body/geom quats)",
+  "kinematic_chain": [
+    {
+      "collection": "Base",
+      "output_name": "base",
+      "joint_origin_object": "Segment_0",
+      "comment": "Base link - origin at world origin"
+    },
+    {
+      "collection": "Asset_1",
+      "output_name": "link1",
+      "joint_origin_object": "Segment_1",
+      "joint_axis": [
+        0,
+        0,
+        1
+      ],
+      "servo": "HK15338",
+      "comment": "J1 Yaw - rotates around Z"
+    },
+    {
+      "collection": "Asset_2",
+      "output_name": "link2",
+      "joint_origin_object": "Segment_2",
+      "joint_axis": [
+        1,
+        0,
+        0
+      ],
+      "servo": "HK15298B",
+      "comment": "J2 Pitch - rotates around X"
+    },
+    {
+      "collection": "Asset_3",
+      "output_name": "link3",
+      "joint_origin_object": "Segment_3",
+      "joint_axis": [
+        1,
+        0,
+        0
+      ],
+      "servo": "HK15328A",
+      "comment": "J3 Pitch - rotates around X"
+    },
+    {
+      "collection": "Asset_4",
+      "output_name": "link4",
+      "joint_origin_object": "Segment_4",
+      "joint_axis": [
+        0,
+        1,
+        0
+      ],
+      "servo": "HK15138",
+      "comment": "J4 Roll - rotates around Y"
+    },
+    {
+      "collection": "Asset_5",
+      "output_name": "head",
+      "joint_origin_object": "Segment_5",
+      "joint_axis": [
+        0,
+        0,
+        1
+      ],
+      "servo": "HK15178",
+      "comment": "J5 Yaw - rotates around Z"
+    }
+  ],
+  "servos": {
+    "_comment": "Servo specs. torque_kgcm is stall torque from datasheet.",
+    "HK15338":  { "torque_kgcm": 25.0 },
+    "HK15298B": { "torque_kgcm": 20.0 },
+    "HK15328A": { "torque_kgcm": 12.8 },
+    "HK15138":  { "torque_kgcm": 4.3 },
+    "HK15178":  { "torque_kgcm": 1.4 }
+  },
+  "material_densities": {
+    "_comment": "Material densities in kg/m³. Use 'default' for any unmatched materials.",
+    "default": 1000.0,
+    "Pine": 553.0,
+    "SingleBalsa": 160.0,
+    "ServoBlack": 1100.0
+  },
+  "export_settings": {
+    "apply_modifiers": true,
+    "triangulate": false,
+    "scale": 0.0395
+  }
+}

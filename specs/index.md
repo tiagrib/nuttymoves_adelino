@@ -18,4 +18,4 @@ RL training pipeline for a 5-DOF hobby-servo robot, from simulation through real
 
 ## Embodiment
 
-The Adelino embodiment definition lives at `embodiments/adelino/` and also serves as the built-in example for the general [Embodiment Definition Guide](../../docs/embodiment-definition/index.md).
+The Adelino embodiment definition lives at `embodiment/` (within this repo) and also serves as the built-in example for the general [Embodiment Definition Guide](../../docs/embodiment-definition/index.md).
