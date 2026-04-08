@@ -27,7 +27,7 @@
 // [6-7]  J3 PWM  uint16 LE
 // [8-9]  J4 PWM  uint16 LE
 // [10-11] J5 PWM uint16 LE
-// [12]   flags   (bit 0: LED)
+// [12]   flags   (bit 0: LED, bit 1: disable watchdog)
 // [13]   checksum (XOR of bytes 0..12)
 
 struct CommandPacket {

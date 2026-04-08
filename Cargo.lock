@@ -75,7 +75,6 @@ dependencies = [
 [[package]]
 name = "arduino-controller"
 version = "0.1.0"
-source = "git+https://github.com/tiagrib/nuttymoves.git#ca6b1e2304e40cd79c49079e3cb95c5eca765fa5"
 dependencies = [
  "async-trait",
  "bytes",

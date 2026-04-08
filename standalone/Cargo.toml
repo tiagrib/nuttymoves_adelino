@@ -5,7 +5,7 @@ edition = "2021"
 description = "Standalone controller for the Adelino 5-DOF servo robot"
 
 [dependencies]
-arduino-controller = { git = "https://github.com/tiagrib/nuttymoves.git" }
+arduino-controller = { path = "../../../controllers/arduino-controller" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1"

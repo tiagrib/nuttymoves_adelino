@@ -33,6 +33,7 @@ uint16_t target_pwm[NUM_JOINTS];
 float imu_quat[4] = {1.0f, 0.0f, 0.0f, 0.0f};  // identity quaternion
 bool imu_data_valid = false;
 bool watchdog_active = false;
+bool watchdog_disabled = false;
 
 unsigned long last_cmd_time = 0;
 unsigned long last_state_send = 0;
@@ -100,11 +101,13 @@ void loop() {
                 if (cmd.flags & 0x01) {
                     digitalWrite(STATUS_LED, HIGH);
                 } else {
-                    // Only control LED via flags if IMU is not driving it
                     #if !IMU_ENABLED
                     digitalWrite(STATUS_LED, LOW);
                     #endif
                 }
+
+                // Bit 1: disable watchdog (useful during policy training)
+                watchdog_disabled = (cmd.flags & 0x02) != 0;
 
                 last_cmd_time = millis();
                 watchdog_active = false;
@@ -117,7 +120,7 @@ void loop() {
     }
 
     // ---- 2. Watchdog: return to neutral if no commands received ----
-    if (millis() - last_cmd_time > WATCHDOG_TIMEOUT_MS) {
+    if (!watchdog_disabled && millis() - last_cmd_time > WATCHDOG_TIMEOUT_MS) {
         if (!watchdog_active) {
             for (uint8_t i = 0; i < NUM_JOINTS; i++) {
                 target_pwm[i] = PWM_NEUTRAL;

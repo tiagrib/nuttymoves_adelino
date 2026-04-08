@@ -2,7 +2,7 @@
 #define ADELINO_CONFIG_H
 
 // ============================================================
-// Adelino Robot - Arduino Mega 2560 Configuration
+// Adelino Robot - Arduino Uno Configuration
 // ============================================================
 
 // -- Servo Configuration --
@@ -42,7 +42,7 @@
 // Set to 1 to compile with BNO085 IMU support on I2C
 // Set to 0 to compile without IMU (state packets use type 0x02)
 #define IMU_ENABLED      0
-#define IMU_SDA          20
-#define IMU_SCL          21
+#define IMU_SDA          A4
+#define IMU_SCL          A5
 
 #endif // ADELINO_CONFIG_H
