@@ -45,9 +45,9 @@ enum Commands {
         #[arg(long, default_value = "COM3")]
         port: String,
 
-        /// Arduino Fully Qualified Board Name
-        #[arg(long, default_value = "arduino:avr:mega:cpu=atmega2560")]
-        fqbn: String,
+        /// Arduino FQBN (auto-detected from port if omitted)
+        #[arg(long)]
+        fqbn: Option<String>,
 
         /// Path to firmware directory
         #[arg(long)]
@@ -62,6 +62,21 @@ enum Commands {
 
         /// Output calibration file path
         #[arg(long, default_value = "calibration.toml")]
+        output: PathBuf,
+    },
+
+    /// Back up the current Arduino firmware to a hex file
+    Backup {
+        /// Serial port for the Arduino
+        #[arg(long, default_value = "COM3")]
+        port: String,
+
+        /// Arduino FQBN (auto-detected from port if omitted)
+        #[arg(long)]
+        fqbn: Option<String>,
+
+        /// Output hex file path
+        #[arg(long, default_value = "firmware_backup.hex")]
         output: PathBuf,
     },
 
@@ -109,8 +124,32 @@ async fn main() {
             fqbn,
             firmware_dir,
         } => {
+            let fqbn = match resolve_fqbn(fqbn, &port) {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("Board detection error: {e}");
+                    std::process::exit(1);
+                }
+            };
             if let Err(e) = flash_firmware(&port, &fqbn, firmware_dir) {
                 error!("Flash error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Backup {
+            port,
+            fqbn,
+            output,
+        } => {
+            let fqbn = match resolve_fqbn(fqbn, &port) {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("Board detection error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = backup_firmware(&port, &fqbn, &output) {
+                error!("Backup error: {e}");
                 std::process::exit(1);
             }
         }
@@ -177,6 +216,87 @@ async fn run_controller(
     Ok(())
 }
 
+/// Use the explicit FQBN if provided, otherwise auto-detect from the port.
+fn resolve_fqbn(
+    explicit: Option<String>,
+    port: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(fqbn) = explicit {
+        return Ok(fqbn);
+    }
+    info!("No --fqbn specified, detecting board on {port}...");
+    let fqbn = detect_fqbn(port)?;
+    info!("Detected board: {fqbn}");
+    Ok(fqbn)
+}
+
+/// Run `arduino-cli board list --format json` and extract the FQBN for the given port.
+///
+/// The JSON structure is:
+/// ```json
+/// { "detected_ports": [ { "matching_boards": [{ "fqbn": "..." }],
+///                          "port": { "address": "COM3" } } ] }
+/// ```
+fn detect_fqbn(port: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("arduino-cli")
+        .args(["board", "list", "--format", "json"])
+        .output()
+        .map_err(|_| "arduino-cli not found on PATH")?;
+
+    if !output.status.success() {
+        return Err("arduino-cli board list failed".into());
+    }
+
+    let text = String::from_utf8(output.stdout)?;
+    let port_upper = port.to_uppercase();
+
+    // Split on each detected port entry boundary.
+    // Each block between "matching_boards" entries represents one detected port.
+    for entry in text.split("\"matching_boards\"") {
+        // The port address appears after this block's matching_boards section.
+        // Check if this entry's port.address matches ours.
+        let entry_upper = entry.to_uppercase();
+        let has_port = entry_upper
+            .find("\"ADDRESS\"")
+            .and_then(|pos| {
+                let after = &entry_upper[pos..];
+                after.find(&port_upper)
+            })
+            .is_some();
+
+        if !has_port {
+            continue;
+        }
+
+        // Extract fqbn from this entry's matching_boards
+        if let Some(result) = extract_json_string_value(entry, "fqbn") {
+            if !result.is_empty() {
+                return Ok(result);
+            }
+        }
+    }
+
+    Err(format!(
+        "Could not detect board on {port}. Is it plugged in? \
+         You can specify the board manually with --fqbn (run `arduino-cli board list` to check)."
+    )
+    .into())
+}
+
+/// Extract the first string value for a given key from a JSON fragment.
+/// e.g. for key "fqbn", finds `"fqbn": "arduino:avr:uno"` and returns `arduino:avr:uno`.
+fn extract_json_string_value(text: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{key}\"");
+    let key_pos = text.find(&pattern)?;
+    let after_key = &text[key_pos + pattern.len()..];
+    // Skip whitespace and colon
+    let after_colon = after_key.find(':').map(|p| &after_key[p + 1..])?;
+    let q_start = after_colon.find('"')?;
+    let after_q = &after_colon[q_start + 1..];
+    let q_end = after_q.find('"')?;
+    Some(after_q[..q_end].to_string())
+}
+
 fn flash_firmware(
     port: &str,
     fqbn: &str,
@@ -227,6 +347,150 @@ fn flash_firmware(
 
     info!("Firmware flashed successfully to {port}");
     Ok(())
+}
+
+fn backup_firmware(
+    port: &str,
+    fqbn: &str,
+    output: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Extract MCU and programmer from FQBN
+    // e.g. "arduino:avr:mega:cpu=atmega2560" -> "atmega2560", programmer "wiring"
+    let (mcu, programmer, baud) = parse_fqbn_for_avrdude(fqbn)?;
+
+    // Locate avrdude via arduino-cli
+    let avrdude = find_avrdude()?;
+    info!("Using avrdude: {}", avrdude.display());
+
+    info!("Reading firmware from {port} into {}...", output.display());
+    let flash_arg = format!("flash:r:{}:i", output.display());
+    let status = Command::new(&avrdude)
+        .args(["-p", &mcu, "-c", &programmer, "-P", port, "-b", &baud])
+        .args(["-U", &flash_arg])
+        .status()?;
+
+    if !status.success() {
+        return Err("avrdude failed to read firmware".into());
+    }
+
+    info!("Firmware backed up to {}", output.display());
+    info!("Restore later with: adelino-standalone flash --port {port}");
+    Ok(())
+}
+
+/// Extract MCU, programmer, and baud from an Arduino FQBN.
+fn parse_fqbn_for_avrdude(fqbn: &str) -> Result<(String, String, String), Box<dyn std::error::Error>> {
+    // FQBN format: "vendor:arch:board:options"
+    // Currently only supports arduino:avr:mega:cpu=atmega2560
+    let parts: Vec<&str> = fqbn.split(':').collect();
+    if parts.len() < 3 {
+        return Err(format!("Invalid FQBN: {fqbn}").into());
+    }
+
+    let board = parts[2];
+    match board {
+        "mega" => {
+            // Extract CPU from options if present, default to atmega2560
+            let mcu = parts
+                .get(3)
+                .and_then(|opts| opts.strip_prefix("cpu="))
+                .unwrap_or("atmega2560")
+                .to_string();
+            Ok((mcu, "wiring".to_string(), "115200".to_string()))
+        }
+        "uno" => Ok(("atmega328p".to_string(), "arduino".to_string(), "115200".to_string())),
+        "nano" => Ok(("atmega328p".to_string(), "arduino".to_string(), "57600".to_string())),
+        "leonardo" => Ok(("atmega32u4".to_string(), "avr109".to_string(), "57600".to_string())),
+        _ => Err(format!(
+            "Unsupported board '{board}' in FQBN. Supported: mega, uno, nano, leonardo"
+        )
+        .into()),
+    }
+}
+
+/// Find avrdude, preferring the one bundled with arduino-cli.
+fn find_avrdude() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let avrdude_rel = Path::new("packages/arduino/tools/avrdude");
+
+    // Collect candidate Arduino data directories
+    let mut data_dirs: Vec<PathBuf> = Vec::new();
+
+    // 1. Try arduino-cli config
+    if let Ok(output) = Command::new("arduino-cli")
+        .args(["config", "dump", "--format", "json"])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(text) = String::from_utf8(output.stdout) {
+                if let Some(dir) = extract_arduino_data_dir(&text) {
+                    data_dirs.push(PathBuf::from(dir));
+                }
+            }
+        }
+    }
+
+    // 2. Platform-specific defaults
+    if cfg!(windows) {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            data_dirs.push(PathBuf::from(local).join("Arduino15"));
+        }
+    } else if cfg!(target_os = "macos") {
+        if let Ok(home) = std::env::var("HOME") {
+            data_dirs.push(PathBuf::from(home).join("Library/Arduino15"));
+        }
+    } else {
+        if let Ok(home) = std::env::var("HOME") {
+            data_dirs.push(PathBuf::from(home).join(".arduino15"));
+        }
+    }
+
+    // Search each data directory for the latest avrdude version
+    for data_dir in &data_dirs {
+        let avrdude_base = data_dir.join(avrdude_rel);
+        if let Ok(entries) = std::fs::read_dir(&avrdude_base) {
+            let mut versions: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
+            versions.sort();
+            if let Some(version_dir) = versions.last() {
+                let avrdude_exe = version_dir.join("bin/avrdude.exe");
+                if avrdude_exe.exists() {
+                    return Ok(avrdude_exe);
+                }
+                let avrdude = version_dir.join("bin/avrdude");
+                if avrdude.exists() {
+                    return Ok(avrdude);
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: check if avrdude is on PATH
+    if Command::new("avrdude").arg("-?").output().is_ok() {
+        return Ok(PathBuf::from("avrdude"));
+    }
+
+    Err(
+        "avrdude not found. Install arduino-cli (which bundles avrdude) \
+         or install avrdude separately and ensure it is on PATH."
+            .into(),
+    )
+}
+
+/// Extract the data directory from arduino-cli JSON config output.
+fn extract_arduino_data_dir(json_text: &str) -> Option<String> {
+    let dirs_start = json_text.find("\"directories\"")?;
+    let after_dirs = &json_text[dirs_start..];
+    let data_start = after_dirs.find("\"data\"")?;
+    let after_data = &after_dirs[data_start..];
+    let colon = after_data.find(':')?;
+    let after_colon = &after_data[colon + 1..];
+    let quote_start = after_colon.find('"')?;
+    let after_quote = &after_colon[quote_start + 1..];
+    let quote_end = after_quote.find('"')?;
+    Some(after_quote[..quote_end].replace("\\\\", "/").replace('\\', "/"))
 }
 
 fn find_firmware_dir() -> PathBuf {

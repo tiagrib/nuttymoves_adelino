@@ -58,7 +58,71 @@ Verify:
 arduino-cli version
 ```
 
-## 4. Flash Firmware
+### Detect your board
+
+Plug in the Arduino via USB and run:
+
+```
+arduino-cli board list
+```
+
+Example output:
+
+```
+Port Protocol Type              Board Name        FQBN                                Core
+COM3 serial   Serial Port (USB) Arduino UNO       arduino:avr:uno                     arduino:avr
+COM5 serial   Serial Port (USB) Arduino Mega 2560 arduino:avr:mega:cpu=atmega2560      arduino:avr
+```
+
+This tells you the **port** (e.g. `COM3`) and the **FQBN** (Fully Qualified Board Name, e.g. `arduino:avr:uno`) for your board. Use these values with the `--port` and `--fqbn` flags in the commands below.
+
+If your board shows as "Unknown", you may need to install additional cores. List all available board types with:
+
+```
+arduino-cli board listall
+```
+
+And search for a specific board:
+
+```
+arduino-cli board listall mega
+```
+
+> **Note:** On Windows, you can also check the port in Device Manager under "Ports (COM & LPT)".
+
+## 4. Back Up Existing Firmware
+
+Before flashing new firmware, you can save the current Arduino program to a hex file so it can be restored later:
+
+```
+adelino-standalone backup --port COM3
+```
+
+This reads the flash memory from the Arduino and saves it to `firmware_backup.hex` in the current directory. The board type is auto-detected from the port, so you don't need to specify `--fqbn`:
+
+```
+adelino-standalone backup --port COM3
+
+# Custom output path
+adelino-standalone backup --port COM3 --output my_backup.hex
+
+# Override auto-detection if needed
+adelino-standalone backup --port COM3 --fqbn arduino:avr:mega:cpu=atmega2560
+```
+
+**Restore later:** Re-flash the backup hex using avrdude directly. Use the parameters that match your board:
+
+```
+# Mega 2560
+avrdude -p atmega2560 -c wiring -P COM3 -b 115200 -D -U flash:w:firmware_backup.hex:i
+
+# UNO
+avrdude -p atmega328p -c arduino -P COM3 -b 115200 -D -U flash:w:firmware_backup.hex:i
+```
+
+> **Note:** This backs up the compiled binary, not source code. Your `.ino` source is already version-controlled in `firmware/`.
+
+## 5. Flash Firmware
 
 With the Arduino connected via USB:
 
@@ -66,9 +130,7 @@ With the Arduino connected via USB:
 adelino-standalone flash --port COM3
 ```
 
-This compiles and uploads the firmware from `firmware/` to the Arduino Mega 2560.
-
-The default `--fqbn` is `arduino:avr:mega:cpu=atmega2560`. If using a different board, override it:
+This compiles and uploads the firmware from `firmware/` to the Arduino. The board type is auto-detected from the port. To override auto-detection:
 
 ```
 adelino-standalone flash --port COM3 --fqbn arduino:avr:mega:cpu=atmega2560
@@ -80,7 +142,7 @@ If the firmware directory is not found automatically, specify it:
 adelino-standalone flash --port COM3 --firmware-dir path/to/projects/adelino/firmware
 ```
 
-## 5. Run the Controller
+## 6. Run the Controller
 
 Start the WebSocket-to-serial bridge:
 
@@ -98,7 +160,7 @@ adelino-standalone run --port COM3 --ws-port 8765 --baud 115200 --calibration ca
 
 If a `calibration.toml` file exists in the current directory, it will be loaded automatically even without the `--calibration` flag.
 
-## 6. Calibrate Servos
+## 7. Calibrate Servos
 
 Calibration maps radians to PWM microseconds for each servo, accounting for mechanical offsets and direction.
 
@@ -122,7 +184,7 @@ After calibrating all 5 joints, the result is saved to the specified TOML file. 
 adelino-standalone run --port COM3 --calibration calibration.toml
 ```
 
-## 7. Test Servos
+## 8. Test Servos
 
 Test all servos by sweeping through their calibrated range:
 
@@ -144,7 +206,7 @@ Load a specific calibration for testing:
 adelino-standalone test --port COM3 --calibration calibration.toml
 ```
 
-## 8. WebSocket Protocol
+## 9. WebSocket Protocol
 
 The controller speaks the WebSocket JSON protocol defined in `metak-shared/api-contracts/controller-websocket.md`.
 
@@ -215,7 +277,7 @@ finally:
 - **Watchdog**: If no command is received within 500ms, the controller sends a neutral pose to the Arduino. The `status.watchdog_active` field in the state message indicates when this has triggered.
 - **Joint order**: Positions are always ordered J1 through J5, matching pins 2 through 6.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 ### Wrong COM port
 
