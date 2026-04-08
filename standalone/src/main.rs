@@ -511,11 +511,50 @@ fn find_firmware_dir() -> PathBuf {
     PathBuf::from("firmware")
 }
 
+/// Send a PWM command with the watchdog disabled (flag 0x02),
+/// then drain any pending state packets so the serial receive buffer
+/// doesn't overflow (which causes "semaphore timeout" on Windows).
+fn send_cal_cmd(
+    transport: &mut arduino_controller::transport::SerialTransport,
+    pwm: [u16; 5],
+) -> std::io::Result<()> {
+    use arduino_controller::transport::protocol::CommandPacket;
+    // Drain before sending — the buffer may have filled while waiting for input
+    while transport.try_read_state()?.is_some() {}
+    transport.send_command(&CommandPacket { pwm, flags: 0x02 })?;
+    while transport.try_read_state()?.is_some() {}
+    Ok(())
+}
+
+/// Wait for a key event, draining the serial buffer every 100ms so
+/// the Arduino's state packets don't pile up and trigger os error 121.
+fn wait_key(
+    transport: &mut arduino_controller::transport::SerialTransport,
+) -> Result<crossterm::event::KeyEvent, Box<dyn std::error::Error>> {
+    use crossterm::event::{self, Event, KeyEventKind};
+    use std::time::Duration;
+    loop {
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(ke) = event::read()? {
+                // Only react to key-press events; ignore release/repeat
+                // so that e.g. releasing Enter doesn't auto-confirm the next step.
+                if ke.kind == KeyEventKind::Press {
+                    return Ok(ke);
+                }
+            }
+        }
+        // No key yet — drain serial buffer while idle
+        while transport.try_read_state()?.is_some() {}
+    }
+}
+
 async fn run_calibration(
     port: &str,
     output: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::{self, BufRead, Write};
+    use std::io::Write;
+    use crossterm::event::{KeyCode, KeyModifiers};
+    use crossterm::terminal;
 
     let config = adelino_config::default_config();
     let mut transport =
@@ -524,152 +563,206 @@ async fn run_calibration(
     info!("Starting calibration for {} joints", config.joints.len());
     println!("\n=== Adelino Servo Calibration ===");
     println!("This process will calibrate each servo's center position and range.");
-    println!("Make sure the robot is in a safe position.\n");
+    println!("Make sure the robot is in a safe position.");
+    println!("Watchdog is disabled during calibration -- servos hold position.\n");
 
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
+    let mut stdout = std::io::stdout();
     let mut calibrations = Vec::new();
 
-    for joint in &config.joints {
-        println!("--- Calibrating {} (pin {}, {}) ---", joint.name, joint.pin, joint.servo_model);
+    // Enable raw mode so keypresses are handled immediately
+    terminal::enable_raw_mode()?;
 
-        // Step 1: Find center
-        println!("Step 1: Finding center position");
-        println!("  Use +/- keys to nudge the servo. Press Enter when at mechanical center.");
-        let mut current_pwm = joint.pwm_center_us;
-        let center_pwm = loop {
-            // Send current position
-            let mut pwm = [1500u16; 5];
-            pwm[config.joints.iter().position(|j| j.name == joint.name).unwrap()] = current_pwm;
-            arduino_controller::transport::send_raw_pwm(&mut transport, pwm)?;
-
-            print!("  PWM: {current_pwm}  (+/-/Enter): ");
-            stdout.flush()?;
-
-            let mut line = String::new();
-            stdin.lock().read_line(&mut line)?;
-            let line = line.trim();
-
-            if line.is_empty() {
-                break current_pwm;
-            } else if let Some(rest) = line.strip_prefix('+') {
-                let step: u16 = rest.parse().unwrap_or(10);
-                current_pwm = (current_pwm + step).min(2500);
-            } else if let Some(rest) = line.strip_prefix('-') {
-                let step: u16 = rest.parse().unwrap_or(10);
-                current_pwm = current_pwm.saturating_sub(step);
-            } else if let Ok(pwm) = line.parse::<u16>() {
-                current_pwm = pwm.clamp(500, 2500);
-            }
-        };
-        println!("  Center PWM: {center_pwm}");
-
-        // Step 2: Positive range
-        println!("Step 2: Finding positive range limit");
-        println!("  Nudge with +/- keys. Press Enter at the safe physical limit.");
-        current_pwm = center_pwm;
-        let max_pwm = loop {
-            let mut pwm = [1500u16; 5];
-            pwm[config.joints.iter().position(|j| j.name == joint.name).unwrap()] = current_pwm;
-            arduino_controller::transport::send_raw_pwm(&mut transport, pwm)?;
-
-            print!("  PWM: {current_pwm} (delta: +{})  (+/-/Enter): ", current_pwm - center_pwm);
-            stdout.flush()?;
-
-            let mut line = String::new();
-            stdin.lock().read_line(&mut line)?;
-            let line = line.trim();
-
-            if line.is_empty() {
-                break current_pwm;
-            } else if let Some(rest) = line.strip_prefix('+') {
-                let step: u16 = rest.parse().unwrap_or(10);
-                current_pwm = (current_pwm + step).min(2500);
-            } else if let Some(rest) = line.strip_prefix('-') {
-                let step: u16 = rest.parse().unwrap_or(10);
-                current_pwm = current_pwm.saturating_sub(step);
-            }
-        };
-
-        // Step 3: Negative range
-        println!("Step 3: Finding negative range limit");
-        println!("  Nudge with +/- keys. Press Enter at the safe physical limit.");
-        current_pwm = center_pwm;
-        let min_pwm = loop {
-            let mut pwm = [1500u16; 5];
-            pwm[config.joints.iter().position(|j| j.name == joint.name).unwrap()] = current_pwm;
-            arduino_controller::transport::send_raw_pwm(&mut transport, pwm)?;
-
-            print!("  PWM: {current_pwm} (delta: {})  (+/-/Enter): ", current_pwm as i32 - center_pwm as i32);
-            stdout.flush()?;
-
-            let mut line = String::new();
-            stdin.lock().read_line(&mut line)?;
-            let line = line.trim();
-
-            if line.is_empty() {
-                break current_pwm;
-            } else if let Some(rest) = line.strip_prefix('+') {
-                let step: u16 = rest.parse().unwrap_or(10);
-                current_pwm = (current_pwm + step).min(2500);
-            } else if let Some(rest) = line.strip_prefix('-') {
-                let step: u16 = rest.parse().unwrap_or(10);
-                current_pwm = current_pwm.saturating_sub(step);
-            }
-        };
-
-        // Compute calibration
-        let pos_delta_pwm = (max_pwm as f32 - center_pwm as f32).abs();
-        let neg_delta_pwm = (center_pwm as f32 - min_pwm as f32).abs();
-        let max_rad = joint.angle_max_rad;
-        let min_rad = joint.angle_min_rad;
-
-        let pwm_per_rad_pos = if max_rad.abs() > 1e-6 {
-            pos_delta_pwm / max_rad
-        } else {
-            0.0
-        };
-        let pwm_per_rad_neg = if min_rad.abs() > 1e-6 {
-            neg_delta_pwm / min_rad.abs()
-        } else {
-            0.0
-        };
-
-        // Step 4: Direction check
-        println!("Step 4: Direction check");
-        let test_rad = 0.1;
-        let test_pwm = (center_pwm as f32 + test_rad * pwm_per_rad_pos) as u16;
-        let mut pwm_arr = [1500u16; 5];
-        let joint_idx = config.joints.iter().position(|j| j.name == joint.name).unwrap();
-        pwm_arr[joint_idx] = test_pwm;
-        arduino_controller::transport::send_raw_pwm(&mut transport, pwm_arr)?;
-
-        print!("  Moved to +0.1 rad ({test_pwm} PWM). Is this the positive direction? (y/n): ");
-        stdout.flush()?;
-        let mut line = String::new();
-        stdin.lock().read_line(&mut line)?;
-        let inverted = line.trim().to_lowercase() != "y";
-
-        // Return to center
-        pwm_arr[joint_idx] = center_pwm;
-        arduino_controller::transport::send_raw_pwm(&mut transport, pwm_arr)?;
-
-        let cal = arduino_controller::JointCalibration {
-            name: joint.name.clone(),
-            center_pwm,
-            pwm_per_rad_pos,
-            pwm_per_rad_neg,
-            min_rad,
-            max_rad,
-            inverted,
-        };
-
-        println!("  {} calibrated: center={}, pos_scale={:.1}, neg_scale={:.1}, inverted={}",
-            cal.name, cal.center_pwm, cal.pwm_per_rad_pos, cal.pwm_per_rad_neg, cal.inverted);
-        println!();
-
-        calibrations.push(cal);
+    // Drain any stale terminal events (e.g. the Enter from launching the command)
+    {
+        use crossterm::event;
+        use std::time::Duration;
+        while event::poll(Duration::from_millis(50))? {
+            let _ = event::read()?;
+        }
     }
+
+    // Ensure raw mode is disabled on early return / panic
+    let result = (|| -> Result<Vec<arduino_controller::JointCalibration>, Box<dyn std::error::Error>> {
+        for joint in &config.joints {
+            let joint_idx = config.joints.iter().position(|j| j.name == joint.name).unwrap();
+
+            print!("--- Calibrating {} (pin {}, {}) ---\r\n", joint.name, joint.pin, joint.servo_model);
+
+            // Helper: build a pwm array with only the active joint set
+            let make_pwm = |val: u16| -> [u16; 5] {
+                let mut pwm = [1500u16; 5];
+                pwm[joint_idx] = val;
+                pwm
+            };
+
+            // --- Step 1: Find center ---
+            print!("Step 1: Finding center position\r\n");
+            print!("  +/- = nudge 10us | Enter = confirm\r\n");
+            let mut current_pwm = joint.pwm_center_us;
+            send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+            print!("  PWM: {current_pwm}  ");
+            stdout.flush()?;
+            let center_pwm = loop {
+                let ke = wait_key(&mut transport)?;
+                if ke.modifiers.contains(KeyModifiers::CONTROL) && ke.code == KeyCode::Char('c') {
+                    return Err("Calibration cancelled by user".into());
+                }
+                match ke.code {
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
+                        current_pwm = (current_pwm + 10).min(2500);
+                        send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+                        print!("\r  PWM: {current_pwm}  ");
+                        stdout.flush()?;
+                    }
+                    KeyCode::Char('-') => {
+                        current_pwm = current_pwm.saturating_sub(10);
+                        send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+                        print!("\r  PWM: {current_pwm}  ");
+                        stdout.flush()?;
+                    }
+                    KeyCode::Enter => {
+                        print!("\r\n");
+                        break current_pwm;
+                    }
+                    _ => {}
+                }
+            };
+            print!("  Center PWM: {center_pwm}\r\n");
+
+            // --- Step 2: Positive range ---
+            print!("Step 2: Finding positive range limit\r\n");
+            print!("  +/- = nudge 10us | Enter = confirm\r\n");
+            current_pwm = center_pwm;
+            send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+            print!("  PWM: {current_pwm} (delta: +0)  ");
+            stdout.flush()?;
+            let max_pwm = loop {
+                let ke = wait_key(&mut transport)?;
+                if ke.modifiers.contains(KeyModifiers::CONTROL) && ke.code == KeyCode::Char('c') {
+                    return Err("Calibration cancelled by user".into());
+                }
+                match ke.code {
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
+                        current_pwm = (current_pwm + 10).min(2500);
+                        send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+                        print!("\r  PWM: {current_pwm} (delta: {:+})  ", current_pwm as i32 - center_pwm as i32);
+                        stdout.flush()?;
+                    }
+                    KeyCode::Char('-') => {
+                        current_pwm = current_pwm.saturating_sub(10);
+                        send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+                        print!("\r  PWM: {current_pwm} (delta: {:+})  ", current_pwm as i32 - center_pwm as i32);
+                        stdout.flush()?;
+                    }
+                    KeyCode::Enter => {
+                        print!("\r\n");
+                        break current_pwm;
+                    }
+                    _ => {}
+                }
+            };
+
+            // --- Step 3: Negative range ---
+            print!("Step 3: Finding negative range limit\r\n");
+            print!("  +/- = nudge 10us | Enter = confirm\r\n");
+            current_pwm = center_pwm;
+            send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+            print!("  PWM: {current_pwm} (delta: +0)  ");
+            stdout.flush()?;
+            let min_pwm = loop {
+                let ke = wait_key(&mut transport)?;
+                if ke.modifiers.contains(KeyModifiers::CONTROL) && ke.code == KeyCode::Char('c') {
+                    return Err("Calibration cancelled by user".into());
+                }
+                match ke.code {
+                    KeyCode::Char('+') | KeyCode::Char('=') => {
+                        current_pwm = (current_pwm + 10).min(2500);
+                        send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+                        print!("\r  PWM: {current_pwm} (delta: {:+})  ", current_pwm as i32 - center_pwm as i32);
+                        stdout.flush()?;
+                    }
+                    KeyCode::Char('-') => {
+                        current_pwm = current_pwm.saturating_sub(10);
+                        send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+                        print!("\r  PWM: {current_pwm} (delta: {:+})  ", current_pwm as i32 - center_pwm as i32);
+                        stdout.flush()?;
+                    }
+                    KeyCode::Enter => {
+                        print!("\r\n");
+                        break current_pwm;
+                    }
+                    _ => {}
+                }
+            };
+
+            // Compute calibration
+            let pos_delta_pwm = (max_pwm as f32 - center_pwm as f32).abs();
+            let neg_delta_pwm = (center_pwm as f32 - min_pwm as f32).abs();
+            let max_rad = joint.angle_max_rad;
+            let min_rad = joint.angle_min_rad;
+
+            let pwm_per_rad_pos = if max_rad.abs() > 1e-6 {
+                pos_delta_pwm / max_rad
+            } else {
+                0.0
+            };
+            let pwm_per_rad_neg = if min_rad.abs() > 1e-6 {
+                neg_delta_pwm / min_rad.abs()
+            } else {
+                0.0
+            };
+
+            // --- Step 4: Direction check ---
+            print!("Step 4: Direction check\r\n");
+            let test_rad = 0.1;
+            let test_pwm = (center_pwm as f32 + test_rad * pwm_per_rad_pos) as u16;
+            send_cal_cmd(&mut transport, make_pwm(test_pwm))?;
+
+            print!("  Moved to +0.1 rad ({test_pwm} PWM). Is this the positive direction? (y/n): ");
+            stdout.flush()?;
+            let inverted = loop {
+                let ke = wait_key(&mut transport)?;
+                if ke.modifiers.contains(KeyModifiers::CONTROL) && ke.code == KeyCode::Char('c') {
+                    return Err("Calibration cancelled by user".into());
+                }
+                match ke.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        print!("y\r\n");
+                        break false;
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') => {
+                        print!("n\r\n");
+                        break true;
+                    }
+                    _ => {}
+                }
+            };
+
+            // Return to center
+            send_cal_cmd(&mut transport, make_pwm(center_pwm))?;
+
+            let cal = arduino_controller::JointCalibration {
+                name: joint.name.clone(),
+                center_pwm,
+                pwm_per_rad_pos,
+                pwm_per_rad_neg,
+                min_rad,
+                max_rad,
+                inverted,
+            };
+
+            print!("  {} calibrated: center={}, pos_scale={:.1}, neg_scale={:.1}, inverted={}\r\n\r\n",
+                cal.name, cal.center_pwm, cal.pwm_per_rad_pos, cal.pwm_per_rad_neg, cal.inverted);
+
+            calibrations.push(cal);
+        }
+        Ok(calibrations)
+    })();
+
+    // Always restore terminal mode
+    terminal::disable_raw_mode()?;
+
+    let calibrations = result?;
 
     // Save calibration
     let cal_data = CalibrationData {

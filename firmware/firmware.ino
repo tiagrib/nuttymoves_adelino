@@ -12,6 +12,7 @@
 #include "config.h"
 #include "protocol.h"
 #include "imu.h"
+#include "led_matrix.h"
 
 // -- Servo objects --
 Servo servos[NUM_JOINTS];
@@ -39,8 +40,9 @@ unsigned long last_cmd_time = 0;
 unsigned long last_state_send = 0;
 
 // -- Serial receive buffer --
-uint8_t rx_buf[CMD_PACKET_SIZE];
+uint8_t rx_buf[RX_BUF_SIZE];
 uint8_t rx_idx = 0;
+uint8_t rx_expected = 0;  // expected packet size (set after reading type byte)
 bool rx_synced = false;
 
 void setup() {
@@ -56,6 +58,9 @@ void setup() {
     // Status LED
     pinMode(STATUS_LED, OUTPUT);
     digitalWrite(STATUS_LED, LOW);
+
+    // Initialize LED matrix (no-op if LED_MATRIX_ENABLED == 0)
+    led_matrix_init();
 
     // Initialize IMU (no-op if IMU_ENABLED == 0)
     imu_data_valid = imu_init();
@@ -73,47 +78,64 @@ void loop() {
         uint8_t byte = Serial.read();
 
         if (!rx_synced) {
-            // Scanning for sync byte
             if (byte == SYNC_CMD) {
                 rx_buf[0] = byte;
                 rx_idx = 1;
+                rx_expected = 0;  // need type byte next
                 rx_synced = true;
             }
             continue;
         }
 
-        // Accumulate bytes
         rx_buf[rx_idx++] = byte;
 
-        if (rx_idx >= CMD_PACKET_SIZE) {
-            // Full packet received, try to parse
-            CommandPacket cmd;
-            if (parse_command(rx_buf, &cmd)) {
-                // Apply commanded positions with safety clamping
-                for (uint8_t i = 0; i < NUM_JOINTS; i++) {
-                    uint16_t pwm = cmd.pwm[i];
-                    if (pwm < pwm_min[i]) pwm = pwm_min[i];
-                    if (pwm > pwm_max[i]) pwm = pwm_max[i];
-                    target_pwm[i] = pwm;
+        // After receiving the type byte, determine expected packet size
+        if (rx_idx == 2) {
+            rx_expected = expected_cmd_size(byte);
+            if (rx_expected == 0) {
+                // Unknown type — resync
+                rx_synced = false;
+                rx_idx = 0;
+                continue;
+            }
+        }
+
+        if (rx_expected > 0 && rx_idx >= rx_expected) {
+            // Full packet received — dispatch by type
+            switch (rx_buf[1]) {
+                case TYPE_CMD: {
+                    CommandPacket cmd;
+                    if (parse_command(rx_buf, &cmd)) {
+                        for (uint8_t i = 0; i < NUM_JOINTS; i++) {
+                            uint16_t pwm = cmd.pwm[i];
+                            if (pwm < pwm_min[i]) pwm = pwm_min[i];
+                            if (pwm > pwm_max[i]) pwm = pwm_max[i];
+                            target_pwm[i] = pwm;
+                        }
+
+                        if (cmd.flags & 0x01) {
+                            digitalWrite(STATUS_LED, HIGH);
+                        } else {
+                            #if !IMU_ENABLED
+                            digitalWrite(STATUS_LED, LOW);
+                            #endif
+                        }
+
+                        watchdog_disabled = (cmd.flags & 0x02) != 0;
+                        last_cmd_time = millis();
+                        watchdog_active = false;
+                    }
+                    break;
                 }
-
-                // Handle flags
-                if (cmd.flags & 0x01) {
-                    digitalWrite(STATUS_LED, HIGH);
-                } else {
-                    #if !IMU_ENABLED
-                    digitalWrite(STATUS_LED, LOW);
-                    #endif
+                case TYPE_CMD_LED: {
+                    LedCommandPacket led_cmd;
+                    if (parse_led_command(rx_buf, &led_cmd)) {
+                        led_matrix_update(led_cmd.rgb, led_cmd.brightness);
+                    }
+                    break;
                 }
-
-                // Bit 1: disable watchdog (useful during policy training)
-                watchdog_disabled = (cmd.flags & 0x02) != 0;
-
-                last_cmd_time = millis();
-                watchdog_active = false;
             }
 
-            // Reset for next packet
             rx_synced = false;
             rx_idx = 0;
         }

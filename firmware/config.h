@@ -38,6 +38,15 @@
 // -- Status LED --
 #define STATUS_LED       13
 
+// -- LED Matrix (Keyes 2812 8x4, WS2812B) --
+// Set to 1 to compile with LED matrix support
+// Set to 0 to compile without (saves ~1 KB flash)
+#define LED_MATRIX_ENABLED 1
+#define LED_MATRIX_PIN     7
+#define LED_MATRIX_COLS    8
+#define LED_MATRIX_ROWS    4
+#define LED_MATRIX_COUNT   (LED_MATRIX_COLS * LED_MATRIX_ROWS)  // 32
+
 // -- IMU (optional) --
 // Set to 1 to compile with BNO085 IMU support on I2C
 // Set to 0 to compile without IMU (state packets use type 0x02)

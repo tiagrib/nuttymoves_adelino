@@ -13,11 +13,18 @@
 #define TYPE_CMD          0x01
 #define TYPE_STATE_NO_IMU 0x02
 #define TYPE_STATE_IMU    0x03
+#define TYPE_CMD_LED      0x04
 
 // Packet sizes
 #define CMD_PACKET_SIZE         14
 #define STATE_NO_IMU_PACKET_SIZE 14
 #define STATE_IMU_PACKET_SIZE    30
+
+// LED command: sync(1) + type(1) + brightness(1) + 32*RGB(96) + checksum(1) = 100
+#define LED_CMD_PACKET_SIZE     100
+
+// Largest inbound packet (used for rx buffer sizing)
+#define RX_BUF_SIZE             LED_CMD_PACKET_SIZE
 
 // -- Command Packet (PC -> Arduino, 14 bytes) --
 // [0]    sync    = 0xAA
@@ -29,10 +36,22 @@
 // [10-11] J5 PWM uint16 LE
 // [12]   flags   (bit 0: LED, bit 1: disable watchdog)
 // [13]   checksum (XOR of bytes 0..12)
+//
+// -- LED Command Packet (PC -> Arduino, 100 bytes) --
+// [0]    sync       = 0xAA
+// [1]    type       = 0x04
+// [2]    brightness (0-255 global brightness)
+// [3-98] 32 pixels × 3 bytes (R, G, B), row-major logical order
+// [99]   checksum   (XOR of bytes 0..98)
 
 struct CommandPacket {
     uint16_t pwm[5];
     uint8_t flags;
+};
+
+struct LedCommandPacket {
+    uint8_t brightness;
+    const uint8_t* rgb;  // points into rx buffer, 32*3 = 96 bytes
 };
 
 // -- State Packet without IMU (Arduino -> PC, 14 bytes) --
@@ -78,6 +97,26 @@ inline bool parse_command(const uint8_t* buf, CommandPacket* cmd) {
     }
     cmd->flags = buf[12];
     return true;
+}
+
+// Parse an LED command packet from the serial buffer.
+// Returns true if the packet is valid.  rgb pointer borrows into buf.
+inline bool parse_led_command(const uint8_t* buf, LedCommandPacket* cmd) {
+    if (buf[0] != SYNC_CMD || buf[1] != TYPE_CMD_LED) return false;
+    if (compute_checksum(buf, 99) != buf[99]) return false;
+
+    cmd->brightness = buf[2];
+    cmd->rgb = &buf[3];  // 96 bytes of RGB data
+    return true;
+}
+
+// Given a type byte (buf[1]), return the expected full packet size, or 0 if unknown.
+inline uint8_t expected_cmd_size(uint8_t type_byte) {
+    switch (type_byte) {
+        case TYPE_CMD:     return CMD_PACKET_SIZE;
+        case TYPE_CMD_LED: return LED_CMD_PACKET_SIZE;
+        default:           return 0;
+    }
 }
 
 // Build a state packet without IMU into the output buffer.

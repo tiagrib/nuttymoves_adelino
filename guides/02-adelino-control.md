@@ -5,7 +5,7 @@ Step-by-step instructions for setting up, calibrating, and controlling the Adeli
 ## 1. Hardware Setup
 
 **Components:**
-- Arduino Mega 2560
+- Arduino Uno (or Mega 2560)
 - 5 hobby servos wired to digital pins 2-6:
   - Pin 2: J1 -- Base Yaw (HK15338)
   - Pin 3: J2 -- Pitch (HK15298B)
@@ -274,8 +274,24 @@ finally:
 ### Protocol Details
 
 - **Multiple clients**: The server accepts multiple simultaneous WebSocket connections. State is broadcast to all connected clients.
-- **Watchdog**: If no command is received within 500ms, the controller sends a neutral pose to the Arduino. The `status.watchdog_active` field in the state message indicates when this has triggered.
+- **Watchdog**: If no command is received within 500ms, the controller sends a neutral pose to the Arduino. The `status.watchdog_active` field in the state message indicates when this has triggered. You can disable the watchdog per-command by setting `"disable_watchdog": true` (see below).
 - **Joint order**: Positions are always ordered J1 through J5, matching pins 2 through 6.
+
+### Disabling the Watchdog
+
+During policy training or manual experimentation, you may want servos to hold their last commanded position indefinitely rather than snapping to neutral after 500ms of silence. Add `"disable_watchdog": true` to your command messages:
+
+```python
+ws.send(json.dumps({
+    "type": "command",
+    "positions": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "disable_watchdog": True
+}))
+```
+
+This disables both the Arduino-side firmware watchdog and the Rust-side command timeout. The flag is **per-command** -- every command must include it to keep the watchdog disabled. If you stop sending commands with the flag (or stop sending entirely and later resume without it), the watchdog re-engages automatically.
+
+**Safety note:** With the watchdog disabled, servos will hold their last position until a new command arrives or power is cut. Use this only when you have another mechanism to ensure safe operation (e.g. a policy loop or manual supervision).
 
 ## 10. Troubleshooting
 
@@ -300,7 +316,7 @@ finally:
 
 **Symptom:** State messages show `"watchdog_active": true`, servos return to neutral.
 
-**Fix:** The controller expects commands at least every 500ms. Ensure your control loop is sending commands at a sufficient rate. If you are only reading state without sending commands, the watchdog will engage.
+**Fix:** The controller expects commands at least every 500ms. Ensure your control loop is sending commands at a sufficient rate. If you are only reading state without sending commands, the watchdog will engage. For policy training or manual use, you can disable the watchdog by adding `"disable_watchdog": true` to your command messages (see "Disabling the Watchdog" above).
 
 ### Servo jitter
 
