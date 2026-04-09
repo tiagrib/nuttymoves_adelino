@@ -33,9 +33,18 @@ inline uint16_t led_xy_to_index(uint8_t col, uint8_t row) {
 }
 
 /// Initialize the LED strip.  Call once from setup().
+/// Flashes first 3 LEDs (R, G, B) briefly as a self-test.
 inline void led_matrix_init() {
     led_strip.begin();
-    led_strip.setBrightness(30);  // conservative default
+    led_strip.setBrightness(30);
+
+    // Boot self-test: flash R/G/B on first 3 LEDs for 400ms
+    led_strip.setPixelColor(0, 255, 0, 0);
+    led_strip.setPixelColor(1, 0, 255, 0);
+    led_strip.setPixelColor(2, 0, 0, 255);
+    led_strip.show();
+    delay(400);
+
     led_strip.clear();
     led_strip.show();
 }

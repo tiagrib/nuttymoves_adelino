@@ -80,6 +80,17 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Test LED matrix by displaying color patterns
+    LedTest {
+        /// Serial port for the Arduino
+        #[arg(long, default_value = "COM3")]
+        port: String,
+
+        /// LED data pin on the Arduino (must match config.h LED_MATRIX_PIN)
+        #[arg(long, default_value_t = 7)]
+        pin: u8,
+    },
+
     /// Test servos by sweeping through their range
     Test {
         /// Serial port for the Arduino
@@ -156,6 +167,12 @@ async fn main() {
         Commands::Calibrate { port, output } => {
             if let Err(e) = run_calibration(&port, &output).await {
                 error!("Calibration error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::LedTest { port, pin } => {
+            if let Err(e) = run_led_test(&port, pin).await {
+                error!("LED test error: {e}");
                 std::process::exit(1);
             }
         }
@@ -548,6 +565,31 @@ fn wait_key(
     }
 }
 
+/// Smoothly move a single joint from `from_pwm` to `to_pwm` over `duration`,
+/// updating the display with the current value. Uses 50Hz steps.
+fn smooth_move(
+    transport: &mut arduino_controller::transport::SerialTransport,
+    make_pwm: &dyn Fn(u16) -> [u16; 5],
+    from_pwm: u16,
+    to_pwm: u16,
+    center_pwm: u16,
+    duration: std::time::Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    let steps = (duration.as_millis() as f32 / 20.0).max(1.0) as u32; // 50Hz
+    let step_duration = duration / steps;
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        let pwm = from_pwm as f32 + t * (to_pwm as f32 - from_pwm as f32);
+        let pwm = (pwm.round() as u16).clamp(500, 2500);
+        send_cal_cmd(transport, make_pwm(pwm))?;
+        print!("\r  PWM: {pwm} (delta: {:+})  ", pwm as i32 - center_pwm as i32);
+        std::io::stdout().flush()?;
+        std::thread::sleep(step_duration);
+    }
+    Ok(())
+}
+
 async fn run_calibration(
     port: &str,
     output: &Path,
@@ -560,14 +602,34 @@ async fn run_calibration(
     let mut transport =
         arduino_controller::transport::SerialTransport::open(port, config.serial_baud)?;
 
+    // Load existing calibration if the output file already exists
+    let existing_cal = if output.exists() {
+        match CalibrationData::load(output) {
+            Ok(cal) => {
+                info!("Loaded existing calibration from {}", output.display());
+                Some(cal)
+            }
+            Err(e) => {
+                warn!("Failed to load existing calibration: {e}, starting from defaults");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     info!("Starting calibration for {} joints", config.joints.len());
     println!("\n=== Adelino Servo Calibration ===");
     println!("This process will calibrate each servo's center position and range.");
     println!("Make sure the robot is in a safe position.");
-    println!("Watchdog is disabled during calibration -- servos hold position.\n");
+    println!("Watchdog is disabled during calibration -- servos hold position.");
+    if existing_cal.is_some() {
+        println!("Preloaded existing calibration from {}", output.display());
+    }
+    println!();
 
     let mut stdout = std::io::stdout();
-    let mut calibrations = Vec::new();
+    let mut calibrations: Vec<arduino_controller::JointCalibration> = Vec::new();
 
     // Enable raw mode so keypresses are handled immediately
     terminal::enable_raw_mode()?;
@@ -588,17 +650,33 @@ async fn run_calibration(
 
             print!("--- Calibrating {} (pin {}, {}) ---\r\n", joint.name, joint.pin, joint.servo_model);
 
-            // Helper: build a pwm array with only the active joint set
+            // Build a pwm array: already-calibrated joints hold their center,
+            // not-yet-calibrated joints use existing calibration or config default.
             let make_pwm = |val: u16| -> [u16; 5] {
                 let mut pwm = [1500u16; 5];
-                pwm[joint_idx] = val;
+                for (i, jc) in config.joints.iter().enumerate() {
+                    if i == joint_idx {
+                        pwm[i] = val;
+                    } else if let Some(done) = calibrations.iter().find(|c| c.name == jc.name) {
+                        pwm[i] = done.center_pwm;
+                    } else if let Some(ec) = existing_cal.as_ref().and_then(|c| c.joints.iter().find(|j| j.name == jc.name)) {
+                        pwm[i] = ec.center_pwm;
+                    } else {
+                        pwm[i] = jc.pwm_center_us;
+                    }
+                }
                 pwm
             };
+
+            // Use existing calibration's center if available, else config default
+            let prev_cal = existing_cal.as_ref().and_then(|c| {
+                c.joints.iter().find(|j| j.name == joint.name)
+            });
 
             // --- Step 1: Find center ---
             print!("Step 1: Finding center position\r\n");
             print!("  +/- = nudge 10us | Enter = confirm\r\n");
-            let mut current_pwm = joint.pwm_center_us;
+            let mut current_pwm = prev_cal.map_or(joint.pwm_center_us, |c| c.center_pwm);
             send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
             print!("  PWM: {current_pwm}  ");
             stdout.flush()?;
@@ -633,8 +711,18 @@ async fn run_calibration(
             print!("Step 2: Finding positive range limit\r\n");
             print!("  +/- = nudge 10us | Enter = confirm\r\n");
             current_pwm = center_pwm;
-            send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
-            print!("  PWM: {current_pwm} (delta: +0)  ");
+            // If we have a previous calibration, smoothly move to the old max
+            if let Some(pc) = prev_cal {
+                let prev_max = (center_pwm as f32 + pc.pwm_per_rad_pos * pc.max_rad).round() as u16;
+                let prev_max = prev_max.clamp(500, 2500);
+                print!("  Moving to previous max ({prev_max})...\r\n");
+                smooth_move(&mut transport, &make_pwm, center_pwm, prev_max, center_pwm, std::time::Duration::from_secs(1))?;
+                current_pwm = prev_max;
+                print!("\r\n");
+            } else {
+                send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+            }
+            print!("\r  PWM: {current_pwm} (delta: {:+})  ", current_pwm as i32 - center_pwm as i32);
             stdout.flush()?;
             let max_pwm = loop {
                 let ke = wait_key(&mut transport)?;
@@ -665,9 +753,24 @@ async fn run_calibration(
             // --- Step 3: Negative range ---
             print!("Step 3: Finding negative range limit\r\n");
             print!("  +/- = nudge 10us | Enter = confirm\r\n");
+            // First return to center from wherever step 2 left us
+            if current_pwm != center_pwm {
+                smooth_move(&mut transport, &make_pwm, current_pwm, center_pwm, center_pwm, std::time::Duration::from_secs(1))?;
+                print!("\r\n");
+            }
             current_pwm = center_pwm;
-            send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
-            print!("  PWM: {current_pwm} (delta: +0)  ");
+            // If we have a previous calibration, smoothly move to the old min
+            if let Some(pc) = prev_cal {
+                let prev_min = (center_pwm as f32 - pc.pwm_per_rad_neg * pc.min_rad.abs()).round() as u16;
+                let prev_min = prev_min.clamp(500, 2500);
+                print!("  Moving to previous min ({prev_min})...\r\n");
+                smooth_move(&mut transport, &make_pwm, center_pwm, prev_min, center_pwm, std::time::Duration::from_secs(1))?;
+                current_pwm = prev_min;
+                print!("\r\n");
+            } else {
+                send_cal_cmd(&mut transport, make_pwm(current_pwm))?;
+            }
+            print!("\r  PWM: {current_pwm} (delta: {:+})  ", current_pwm as i32 - center_pwm as i32);
             stdout.flush()?;
             let min_pwm = loop {
                 let ke = wait_key(&mut transport)?;
@@ -714,11 +817,14 @@ async fn run_calibration(
 
             // --- Step 4: Direction check ---
             print!("Step 4: Direction check\r\n");
-            let test_rad = 0.1;
+            let test_rad = 0.5;
             let test_pwm = (center_pwm as f32 + test_rad * pwm_per_rad_pos) as u16;
-            send_cal_cmd(&mut transport, make_pwm(test_pwm))?;
+            // Return to center first, then smoothly move to test position
+            send_cal_cmd(&mut transport, make_pwm(center_pwm))?;
+            smooth_move(&mut transport, &make_pwm, center_pwm, test_pwm, center_pwm, std::time::Duration::from_secs(1))?;
+            print!("\r\n");
 
-            print!("  Moved to +0.1 rad ({test_pwm} PWM). Is this the positive direction? (y/n): ");
+            print!("  Moved to +0.5 rad ({test_pwm} PWM). Is this the positive direction? (y/n): ");
             stdout.flush()?;
             let inverted = loop {
                 let ke = wait_key(&mut transport)?;
@@ -739,7 +845,8 @@ async fn run_calibration(
             };
 
             // Return to center
-            send_cal_cmd(&mut transport, make_pwm(center_pwm))?;
+            smooth_move(&mut transport, &make_pwm, test_pwm, center_pwm, center_pwm, std::time::Duration::from_secs(1))?;
+            print!("\r\n");
 
             let cal = arduino_controller::JointCalibration {
                 name: joint.name.clone(),
@@ -777,6 +884,98 @@ async fn run_calibration(
     println!("Use --calibration {} with the run command to load it.", output.display());
 
     Ok(())
+}
+
+async fn run_led_test(
+    port: &str,
+    pin: u8,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use arduino_controller::transport::protocol::{LedCommandPacket, LED_COUNT};
+
+    let config = adelino_config::default_config();
+    let mut transport =
+        arduino_controller::transport::SerialTransport::open(port, config.serial_baud)?;
+
+    // Drain any buffered state packets
+    while transport.try_read_state()?.is_some() {}
+
+    println!("=== LED Matrix Test (pin {pin}) ===");
+    println!();
+
+    // Step 1: Send test pattern via protocol (tests firmware + hardware)
+    println!("Step 1: Sending R/G/B on first 3 LEDs via serial protocol...");
+    let mut cmd = LedCommandPacket {
+        brightness: 30,
+        pixels: [[0; 3]; LED_COUNT],
+    };
+    cmd.pixels[0] = [255, 0, 0]; // red
+    cmd.pixels[1] = [0, 255, 0]; // green
+    cmd.pixels[2] = [0, 0, 255]; // blue
+    transport.send_led_command(&cmd)?;
+    while transport.try_read_state()?.is_some() {}
+
+    println!("  Sent. Do you see 3 LEDs (red, green, blue) on the top-left?");
+    println!("  Press Enter to continue to next pattern, or 'q' to quit.");
+
+    wait_for_key()?;
+
+    // Step 2: Fill all 32 LEDs white at low brightness
+    println!("Step 2: All 32 LEDs white (low brightness)...");
+    let cmd = LedCommandPacket {
+        brightness: 15,
+        pixels: [[255, 255, 255]; LED_COUNT],
+    };
+    transport.send_led_command(&cmd)?;
+    while transport.try_read_state()?.is_some() {}
+
+    println!("  Sent. All LEDs should be dim white.");
+    println!("  Press Enter to continue, or 'q' to quit.");
+
+    wait_for_key()?;
+
+    // Step 3: Row-by-row colors
+    println!("Step 3: Row colors (red, green, blue, white)...");
+    let mut cmd = LedCommandPacket {
+        brightness: 30,
+        pixels: [[0; 3]; LED_COUNT],
+    };
+    for col in 0..8 {
+        cmd.pixels[0 * 8 + col] = [255, 0, 0];   // row 0: red
+        cmd.pixels[1 * 8 + col] = [0, 255, 0];   // row 1: green
+        cmd.pixels[2 * 8 + col] = [0, 0, 255];   // row 2: blue
+        cmd.pixels[3 * 8 + col] = [255, 255, 255]; // row 3: white
+    }
+    transport.send_led_command(&cmd)?;
+    while transport.try_read_state()?.is_some() {}
+
+    println!("  Sent. Rows should be: red, green, blue, white (top to bottom).");
+    println!("  Press Enter to clear and exit, or 'q' to quit without clearing.");
+
+    wait_for_key()?;
+
+    // Clear
+    let cmd = LedCommandPacket {
+        brightness: 0,
+        pixels: [[0; 3]; LED_COUNT],
+    };
+    transport.send_led_command(&cmd)?;
+
+    println!("LEDs cleared. Test complete.");
+    Ok(())
+}
+
+fn wait_for_key() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{self, Read};
+    let mut buf = [0u8; 1];
+    loop {
+        io::stdin().read_exact(&mut buf)?;
+        if buf[0] == b'q' || buf[0] == b'Q' {
+            return Err("Quit by user".into());
+        }
+        if buf[0] == b'\n' || buf[0] == b'\r' {
+            return Ok(());
+        }
+    }
 }
 
 async fn run_test(

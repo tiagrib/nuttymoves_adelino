@@ -14,16 +14,18 @@
 #define SERVO_PIN_J5     6    // Head Yaw (HK15178)
 
 // Per-joint PWM safety limits (microseconds)
-#define PWM_MIN_J1       1000
-#define PWM_MAX_J1       2000
-#define PWM_MIN_J2       1000
-#define PWM_MAX_J2       2000
-#define PWM_MIN_J3       1000
-#define PWM_MAX_J3       2000
-#define PWM_MIN_J4       1000
-#define PWM_MAX_J4       2000
-#define PWM_MIN_J5       1000
-#define PWM_MAX_J5       2000
+// 500-2500 allows the full ~180° range of most hobby servos.
+// Actual safe limits per joint are determined during calibration.
+#define PWM_MIN_J1       500
+#define PWM_MAX_J1       2500
+#define PWM_MIN_J2       500
+#define PWM_MAX_J2       2500
+#define PWM_MIN_J3       500
+#define PWM_MAX_J3       2500
+#define PWM_MIN_J4       500
+#define PWM_MAX_J4       2500
+#define PWM_MIN_J5       500
+#define PWM_MAX_J5       2500
 
 #define PWM_NEUTRAL      1500
 

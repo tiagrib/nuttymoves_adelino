@@ -51,7 +51,7 @@ void setup() {
     // Initialize servos at neutral position
     for (uint8_t i = 0; i < NUM_JOINTS; i++) {
         target_pwm[i] = PWM_NEUTRAL;
-        servos[i].attach(servo_pins[i]);
+        servos[i].attach(servo_pins[i], pwm_min[i], pwm_max[i]);
         servos[i].writeMicroseconds(PWM_NEUTRAL);
     }
 
@@ -60,7 +60,10 @@ void setup() {
     digitalWrite(STATUS_LED, LOW);
 
     // Initialize LED matrix (no-op if LED_MATRIX_ENABLED == 0)
+    // Detach servos during init — their timer ISR corrupts NeoPixel timing
+    for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].detach();
     led_matrix_init();
+    for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].attach(servo_pins[i], pwm_min[i], pwm_max[i]);
 
     // Initialize IMU (no-op if IMU_ENABLED == 0)
     imu_data_valid = imu_init();
@@ -130,7 +133,10 @@ void loop() {
                 case TYPE_CMD_LED: {
                     LedCommandPacket led_cmd;
                     if (parse_led_command(rx_buf, &led_cmd)) {
+                        // Detach servos — their timer ISR corrupts NeoPixel bit timing
+                        for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].detach();
                         led_matrix_update(led_cmd.rgb, led_cmd.brightness);
+                        for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].attach(servo_pins[i], pwm_min[i], pwm_max[i]);
                     }
                     break;
                 }
