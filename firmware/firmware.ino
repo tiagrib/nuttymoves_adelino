@@ -103,7 +103,19 @@ void loop() {
             }
         }
 
-        if (rx_expected > 0 && rx_idx >= rx_expected) {
+        // For variable-length LED packets, compute size once we have the count byte
+        if (rx_expected == LED_CMD_NEEDS_HEADER && rx_idx == LED_CMD_HEADER_SIZE) {
+            uint8_t count = rx_buf[5];
+            if (count > LED_MATRIX_COUNT) {
+                // Invalid count — resync
+                rx_synced = false;
+                rx_idx = 0;
+                continue;
+            }
+            rx_expected = led_cmd_total_size(count);
+        }
+
+        if (rx_expected > 0 && rx_expected != LED_CMD_NEEDS_HEADER && rx_idx >= rx_expected) {
             // Full packet received — dispatch by type
             switch (rx_buf[1]) {
                 case TYPE_CMD: {
@@ -132,11 +144,14 @@ void loop() {
                 }
                 case TYPE_CMD_LED: {
                     LedCommandPacket led_cmd;
-                    if (parse_led_command(rx_buf, &led_cmd)) {
-                        // Detach servos — their timer ISR corrupts NeoPixel bit timing
-                        for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].detach();
-                        led_matrix_update(led_cmd.rgb, led_cmd.brightness);
-                        for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].attach(servo_pins[i], pwm_min[i], pwm_max[i]);
+                    if (parse_led_command(rx_buf, rx_expected, &led_cmd)) {
+                        led_matrix_set_pixels(led_cmd.offset, led_cmd.count, led_cmd.rgb);
+                        if (led_cmd.flags & 0x01) {
+                            // show flag set — detach servos, push pixels, reattach
+                            for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].detach();
+                            led_matrix_show(led_cmd.brightness);
+                            for (uint8_t i = 0; i < NUM_JOINTS; i++) servos[i].attach(servo_pins[i], pwm_min[i], pwm_max[i]);
+                        }
                     }
                     break;
                 }

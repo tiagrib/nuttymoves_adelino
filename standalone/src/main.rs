@@ -890,7 +890,7 @@ async fn run_led_test(
     port: &str,
     pin: u8,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use arduino_controller::transport::protocol::{LedCommandPacket, LED_COUNT};
+    use arduino_controller::transport::protocol::LedCommandPacket;
 
     let config = adelino_config::default_config();
     let mut transport =
@@ -904,14 +904,12 @@ async fn run_led_test(
 
     // Step 1: Send test pattern via protocol (tests firmware + hardware)
     println!("Step 1: Sending R/G/B on first 3 LEDs via serial protocol...");
-    let mut cmd = LedCommandPacket {
+    transport.send_led_command(&LedCommandPacket {
+        show: true,
         brightness: 30,
-        pixels: [[0; 3]; LED_COUNT],
-    };
-    cmd.pixels[0] = [255, 0, 0]; // red
-    cmd.pixels[1] = [0, 255, 0]; // green
-    cmd.pixels[2] = [0, 0, 255]; // blue
-    transport.send_led_command(&cmd)?;
+        offset: 0,
+        pixels: vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+    })?;
     while transport.try_read_state()?.is_some() {}
 
     println!("  Sent. Do you see 3 LEDs (red, green, blue) on the top-left?");
@@ -921,11 +919,12 @@ async fn run_led_test(
 
     // Step 2: Fill all 32 LEDs white at low brightness
     println!("Step 2: All 32 LEDs white (low brightness)...");
-    let cmd = LedCommandPacket {
+    transport.send_led_command(&LedCommandPacket {
+        show: true,
         brightness: 15,
-        pixels: [[255, 255, 255]; LED_COUNT],
-    };
-    transport.send_led_command(&cmd)?;
+        offset: 0,
+        pixels: vec![[255, 255, 255]; 32],
+    })?;
     while transport.try_read_state()?.is_some() {}
 
     println!("  Sent. All LEDs should be dim white.");
@@ -933,19 +932,28 @@ async fn run_led_test(
 
     wait_for_key()?;
 
-    // Step 3: Row-by-row colors
+    // Step 3: Row-by-row colors (using partial updates)
     println!("Step 3: Row colors (red, green, blue, white)...");
-    let mut cmd = LedCommandPacket {
-        brightness: 30,
-        pixels: [[0; 3]; LED_COUNT],
-    };
-    for col in 0..8 {
-        cmd.pixels[0 * 8 + col] = [255, 0, 0];   // row 0: red
-        cmd.pixels[1 * 8 + col] = [0, 255, 0];   // row 1: green
-        cmd.pixels[2 * 8 + col] = [0, 0, 255];   // row 2: blue
-        cmd.pixels[3 * 8 + col] = [255, 255, 255]; // row 3: white
-    }
-    transport.send_led_command(&cmd)?;
+    // Row 0: red (no show yet)
+    transport.send_led_command(&LedCommandPacket {
+        show: false, brightness: 30, offset: 0,
+        pixels: vec![[255, 0, 0]; 8],
+    })?;
+    // Row 1: green
+    transport.send_led_command(&LedCommandPacket {
+        show: false, brightness: 30, offset: 8,
+        pixels: vec![[0, 255, 0]; 8],
+    })?;
+    // Row 2: blue
+    transport.send_led_command(&LedCommandPacket {
+        show: false, brightness: 30, offset: 16,
+        pixels: vec![[0, 0, 255]; 8],
+    })?;
+    // Row 3: white (show!)
+    transport.send_led_command(&LedCommandPacket {
+        show: true, brightness: 30, offset: 24,
+        pixels: vec![[255, 255, 255]; 8],
+    })?;
     while transport.try_read_state()?.is_some() {}
 
     println!("  Sent. Rows should be: red, green, blue, white (top to bottom).");
@@ -954,11 +962,12 @@ async fn run_led_test(
     wait_for_key()?;
 
     // Clear
-    let cmd = LedCommandPacket {
+    transport.send_led_command(&LedCommandPacket {
+        show: true,
         brightness: 0,
-        pixels: [[0; 3]; LED_COUNT],
-    };
-    transport.send_led_command(&cmd)?;
+        offset: 0,
+        pixels: vec![],
+    })?;
 
     println!("LEDs cleared. Test complete.");
     Ok(())

@@ -20,11 +20,13 @@
 #define STATE_NO_IMU_PACKET_SIZE 14
 #define STATE_IMU_PACKET_SIZE    30
 
-// LED command: sync(1) + type(1) + brightness(1) + 32*RGB(96) + checksum(1) = 100
-#define LED_CMD_PACKET_SIZE     100
+// LED command (variable length): header(6) + count*3 + checksum(1) = 7 + count*3
+// Max: 7 + 32*3 = 103 bytes
+#define LED_CMD_HEADER_SIZE     6
+#define LED_CMD_MAX_PACKET_SIZE 103
 
 // Largest inbound packet (used for rx buffer sizing)
-#define RX_BUF_SIZE             LED_CMD_PACKET_SIZE
+#define RX_BUF_SIZE             LED_CMD_MAX_PACKET_SIZE
 
 // -- Command Packet (PC -> Arduino, 14 bytes) --
 // [0]    sync    = 0xAA
@@ -37,12 +39,15 @@
 // [12]   flags   (bit 0: LED, bit 1: disable watchdog)
 // [13]   checksum (XOR of bytes 0..12)
 //
-// -- LED Command Packet (PC -> Arduino, 100 bytes) --
-// [0]    sync       = 0xAA
-// [1]    type       = 0x04
-// [2]    brightness (0-255 global brightness)
-// [3-98] 32 pixels × 3 bytes (R, G, B), row-major logical order
-// [99]   checksum   (XOR of bytes 0..98)
+// -- LED Command Packet (PC -> Arduino, 7 + count*3 bytes, variable) --
+// [0]         sync       = 0xAA
+// [1]         type       = 0x04
+// [2]         flags      (bit 0: call show() after updating pixel buffer)
+// [3]         brightness (0-255 global brightness)
+// [4]         offset     (start pixel index, 0-31)
+// [5]         count      (number of pixels in this packet, 0-32)
+// [6..6+N*3)  count pixels × 3 bytes (R, G, B), row-major logical order
+// [6+N*3]     checksum   (XOR of all preceding bytes)
 
 struct CommandPacket {
     uint16_t pwm[5];
@@ -50,8 +55,11 @@ struct CommandPacket {
 };
 
 struct LedCommandPacket {
+    uint8_t flags;
     uint8_t brightness;
-    const uint8_t* rgb;  // points into rx buffer, 32*3 = 96 bytes
+    uint8_t offset;
+    uint8_t count;
+    const uint8_t* rgb;  // points into rx buffer, count*3 bytes
 };
 
 // -- State Packet without IMU (Arduino -> PC, 14 bytes) --
@@ -99,24 +107,35 @@ inline bool parse_command(const uint8_t* buf, CommandPacket* cmd) {
     return true;
 }
 
-// Parse an LED command packet from the serial buffer.
+// Parse an LED command packet from the serial buffer (variable length).
+// Caller must have already verified the buffer has enough bytes.
 // Returns true if the packet is valid.  rgb pointer borrows into buf.
-inline bool parse_led_command(const uint8_t* buf, LedCommandPacket* cmd) {
+inline bool parse_led_command(const uint8_t* buf, uint8_t total_len, LedCommandPacket* cmd) {
     if (buf[0] != SYNC_CMD || buf[1] != TYPE_CMD_LED) return false;
-    if (compute_checksum(buf, 99) != buf[99]) return false;
+    if (compute_checksum(buf, total_len - 1) != buf[total_len - 1]) return false;
 
-    cmd->brightness = buf[2];
-    cmd->rgb = &buf[3];  // 96 bytes of RGB data
+    cmd->flags      = buf[2];
+    cmd->brightness = buf[3];
+    cmd->offset     = buf[4];
+    cmd->count      = buf[5];
+    cmd->rgb        = &buf[6];  // count*3 bytes of RGB data
     return true;
 }
 
-// Given a type byte (buf[1]), return the expected full packet size, or 0 if unknown.
+// Given a type byte, return the expected full packet size.
+// Returns 0 for unknown types, or LED_CMD_NEEDS_HEADER for variable-length LED.
+#define LED_CMD_NEEDS_HEADER 0xFF
 inline uint8_t expected_cmd_size(uint8_t type_byte) {
     switch (type_byte) {
         case TYPE_CMD:     return CMD_PACKET_SIZE;
-        case TYPE_CMD_LED: return LED_CMD_PACKET_SIZE;
+        case TYPE_CMD_LED: return LED_CMD_NEEDS_HEADER;  // variable, need count byte first
         default:           return 0;
     }
+}
+
+// Compute LED packet size from the count byte (buf[5]).
+inline uint8_t led_cmd_total_size(uint8_t count) {
+    return 7 + count * 3;  // header(6) + pixels + checksum(1)
 }
 
 // Build a state packet without IMU into the output buffer.

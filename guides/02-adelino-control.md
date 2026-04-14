@@ -274,26 +274,37 @@ finally:
 ### Protocol Details
 
 - **Multiple clients**: The server accepts multiple simultaneous WebSocket connections. State is broadcast to all connected clients.
-- **Watchdog**: If no command is received within 500ms, the controller sends a neutral pose to the Arduino. The `status.watchdog_active` field in the state message indicates when this has triggered. You can disable the watchdog per-command by setting `"disable_watchdog": true` (see below).
+- **Keep-alive**: The controller continuously re-sends the last command at 50Hz to keep the Arduino alive. If no client is connected, it holds the calibrated neutral pose.
 - **Joint order**: Positions are always ordered J1 through J5, matching pins 2 through 6.
 
-### Disabling the Watchdog
+## 10. Data Collection (VIMU v2)
 
-During policy training or manual experimentation, you may want servos to hold their last commanded position indefinitely rather than snapping to neutral after 500ms of silence. Add `"disable_watchdog": true` to your command messages:
+The controller doubles as the robot backend for VIMU data collection. VIMU v2 uses a segmentation-first pipeline: you first train a segmentor to recognize the robot, then collect pose data with the segmentor running live to strip backgrounds.
 
-```python
-ws.send(json.dumps({
-    "type": "command",
-    "positions": [0.0, 0.0, 0.0, 0.0, 0.0],
-    "disable_watchdog": True
-}))
+**Prerequisites:** Complete steps 1-7 (hardware, flash, calibrate) first. You need a working `calibration.toml`.
+
+**Quick summary of the VIMU workflow:**
+
+1. Film the robot from various angles (handheld, no servos needed)
+2. Annotate videos with SAM2 (`annotate_seg.py` -- one click per clip)
+3. Train a YOLO segmentor (`train_segmentor.py`)
+4. With the controller running, collect pose data from multiple camera angles:
+
+```bash
+cd vimu/training/
+
+python collect_pose.py sweep \
+    --calibration ../../projects/adelino/target/release/calibration.toml \
+    --seg-model vimu_seg.pt \
+    --camera 0 \
+    --num-poses 500
 ```
 
-This disables both the Arduino-side firmware watchdog and the Rust-side command timeout. The flag is **per-command** -- every command must include it to keep the watchdog disabled. If you stop sending commands with the flag (or stop sending entirely and later resume without it), the watchdog re-engages automatically.
+5. Train the pose model, export to ONNX, run inference
 
-**Safety note:** With the watchdog disabled, servos will hold their last position until a new command arrives or power is cut. Use this only when you have another mechanism to ensure safe operation (e.g. a policy loop or manual supervision).
+See `vimu/README.md` for the full step-by-step workflow.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### Wrong COM port
 
@@ -311,12 +322,6 @@ This disables both the Arduino-side firmware watchdog and the Rust-side command 
 - **No external power:** Servos need a separate 6V supply. Check that the power supply is on and the ground is shared with the Arduino.
 - **Wrong pins:** Verify servos are connected to pins 2-6 as defined in `config.h`.
 - **Firmware not flashed:** Re-flash with `adelino-standalone flash --port COM3`.
-
-### Watchdog timeout
-
-**Symptom:** State messages show `"watchdog_active": true`, servos return to neutral.
-
-**Fix:** The controller expects commands at least every 500ms. Ensure your control loop is sending commands at a sufficient rate. If you are only reading state without sending commands, the watchdog will engage. For policy training or manual use, you can disable the watchdog by adding `"disable_watchdog": true` to your command messages (see "Disabling the Watchdog" above).
 
 ### Servo jitter
 
